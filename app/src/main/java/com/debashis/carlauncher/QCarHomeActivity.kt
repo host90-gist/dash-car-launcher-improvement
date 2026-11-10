@@ -52,7 +52,6 @@ class QCarHomeActivity : Activity() {
     private val muted = Color.rgb(174, 174, 174)
     private val handler = Handler(Looper.getMainLooper())
     private var speedView: TextView? = null
-    private var gpsView: TextView? = null
     private var clockView: TextView? = null
     private var dateView: TextView? = null
     private var mediaTitle: TextView? = null
@@ -178,14 +177,8 @@ class QCarHomeActivity : Activity() {
         outer.addView(sidebar, lp(72, -1))
         rail(sidebar, "⌂", "HOME") { /* Already home */ }
         rail(sidebar, "▦", "APPS") { launchNoAnimation(Intent(this, DrawerActivity::class.java)) }
-        rail(sidebar, "⌖", "WAZE") { openWaze() }
+        rail(sidebar, "⌖", "MAPS") { openGoogleMaps() }
         rail(sidebar, "♫", "MUSIC") { openPoweramp() }
-        rail(sidebar, "♧", "GPS") {
-            GpsControl.toggleOrOpenSettings(this)
-        }
-        rail(sidebar, "ᛒ", "BT") {
-            launchNoAnimation(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-        }
         rail(sidebar, "⚙", "SET") { launchNoAnimation(Intent(this, SettingsActivity::class.java)) }
 
         val main = column().apply { gravity = Gravity.TOP; setBackgroundColor(bg) }
@@ -193,7 +186,7 @@ class QCarHomeActivity : Activity() {
 
         val dashboard = row().apply { gravity = Gravity.TOP }
         main.addView(dashboard, LinearLayout.LayoutParams(-1, 0, 1f))
-        val navigation = card().apply { setOnClickListener { openWaze() } }
+        val navigation = card().apply { setOnClickListener { openGoogleMaps() } }
         dashboard.addView(navigation, inset(navigation, 0, -1, 7f))
         buildNavigation(navigation)
 
@@ -242,9 +235,9 @@ class QCarHomeActivity : Activity() {
         speedView = text("--", 56f, white, true)
         overlay.addView(speedView, lp(-1, 58))
         overlay.addView(text("km/h   •   GPS SPEED", 12f, muted), lp(-1, 25))
-        val open = text("OPEN WAZE  ›", 17f, white, true).apply {
+        val open = text("OPEN GOOGLE MAPS  ›", 17f, white, true).apply {
             background = rounded(accent, 5)
-            setOnClickListener { openWaze() }
+            setOnClickListener { openGoogleMaps() }
         }
         overlay.addView(open, LinearLayout.LayoutParams(-1, dp(54)).apply {
             topMargin = dp(12)
@@ -296,12 +289,6 @@ class QCarHomeActivity : Activity() {
         dateView = text("", 15f, muted)
         content.addView(clockView, LinearLayout.LayoutParams(-1, 0, 1f))
         content.addView(dateView, lp(-1, 45))
-        gpsView = text("GPS • CHECK", 12f, muted).apply {
-            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_qcar_gps, 0, 0, 0)
-            compoundDrawablePadding = dp(5)
-            setOnClickListener { GpsControl.toggleOrOpenSettings(this@QCarHomeActivity) }
-        }
-        content.addView(gpsView, lp(-1, 33))
     }
 
     private fun buildMusic(parent: FrameLayout) {
@@ -369,10 +356,15 @@ class QCarHomeActivity : Activity() {
         overridePendingTransition(0, 0)
     }
 
-    private fun openWaze() {
-        val intent = packageManager.getLaunchIntentForPackage("com.waze")
+    private fun openGoogleMaps() {
+        // Launch the real Google Maps app. An in-app GoogleMap requires
+        // Play Services, a Maps SDK dependency and an API key, none of which
+        // is bundled with this deliberately lightweight launcher.
+        val intent = packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
         if (intent != null) launchNoAnimation(intent)
-        else android.widget.Toast.makeText(this, "Install Waze to use navigation", android.widget.Toast.LENGTH_SHORT).show()
+        else android.widget.Toast.makeText(
+            this, "Google Maps is not installed", android.widget.Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun openPoweramp() {
@@ -395,13 +387,6 @@ class QCarHomeActivity : Activity() {
         val active = manager?.isLocationEnabled == true
         val valid = lastLocationAt > 0L && SystemClock.elapsedRealtime() - lastLocationAt < 5000L
         speedView?.text = if (active && valid) lastSpeedKmh.roundToInt().toString() else "--"
-        gpsView?.text = when {
-            !active -> "GPS OFF"
-            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ->
-                "GPS PERMISSION"
-            valid -> "GPS ACTIVE"
-            else -> "WAITING FOR GPS"
-        }
     }
 
     private fun startGps() {
@@ -520,7 +505,7 @@ class QCarHomeActivity : Activity() {
 
     /**
      * One static lightweight decorative backdrop. It's NOT a navigation map.
-     * A tap always launches the real Waze app.
+     * A tap always launches the real Google Maps app.
      */
     private class RoadGridView(context: Context) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
