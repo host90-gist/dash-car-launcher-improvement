@@ -719,7 +719,7 @@ class SettingsActivity : Activity() {
         musicApp.findViewById<TextView>(R.id.row_sub).text =
             "Choose which app the QCarDash OPEN shortcut launches"
         musicApp.findViewById<TextView>(R.id.row_value).text =
-            Prefs.prefs(this).getString("qcar_music_app", null)?.substringBefore('/') ?: "Poweramp"
+            Prefs.prefs(this).getString("qcar_music_app", null)?.takeIf { it.isNotBlank() }?.substringBefore('/') ?: "Poweramp"
         musicApp.setOnClickListener { choosePreferredApp("qcar_music_app", "Music app") }
         appGroup.addView(musicApp)
         val stockApp = newRow(appGroup)
@@ -741,7 +741,7 @@ class SettingsActivity : Activity() {
             "External navigation app for QCarDash; offline Mapsforge stays embedded"
         app.findViewById<TextView>(R.id.row_value).text =
             Prefs.prefs(this).getString("qcar_navigation_app", null)
-                ?.substringBefore('/') ?: "Not selected"
+                ?.takeIf { it.isNotBlank() }?.substringBefore('/') ?: "Not selected"
         app.setOnClickListener { choosePreferredApp("qcar_navigation_app", "Map app") }
         group.addView(app)
         val launch = newRow(group)
