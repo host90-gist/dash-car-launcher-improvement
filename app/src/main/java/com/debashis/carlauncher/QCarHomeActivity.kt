@@ -271,6 +271,7 @@ class QCarHomeActivity : Activity() {
         outer.addView(sidebar, lp(72, -1))
         rail(sidebar, "⌂", "HOME") { /* Already home */ }
         rail(sidebar, "▦", "APPS") { launchNoAnimation(Intent(this, DrawerActivity::class.java)) }
+        rail(sidebar, "⌖", "NAVI") { openPreferredNavigation() }
         rail(sidebar, "▣", "OEM") { openOemScreen() }
         rail(sidebar, "⚙", "SET") { launchNoAnimation(Intent(this, SettingsActivity::class.java)) }
 
@@ -792,6 +793,37 @@ class QCarHomeActivity : Activity() {
         startActivity(intent)
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
+    }
+
+    /** Launch the user's chosen external navigation application from the dock. */
+    private fun openPreferredNavigation() {
+        val choice = Prefs.prefs(this).getString("qcar_navigation_app", null)
+        if (choice.isNullOrBlank()) {
+            android.widget.Toast.makeText(
+                this, "Choose a map app in Settings → Navigation",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            launchNoAnimation(
+                Intent(this, SettingsActivity::class.java)
+                    .putExtra(SettingsActivity.EXTRA_OPEN_SECTION, "NAVIGATION")
+            )
+            return
+        }
+        try {
+            val parts = choice.split('/', limit = 2)
+            val target = if (parts.size == 2)
+                Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_LAUNCHER)
+                    .setClassName(parts[0], parts[1])
+            else packageManager.getLaunchIntentForPackage(parts[0])
+            if (target == null) throw android.content.ActivityNotFoundException()
+            launchNoAnimation(target)
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(
+                this, "Selected map app is unavailable; choose another in Settings",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     /** Optional chosen app only changes the OPEN shortcut, not Poweramp controls. */
