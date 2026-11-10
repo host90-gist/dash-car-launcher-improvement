@@ -19,6 +19,10 @@ import org.mapsforge.core.model.LatLong
 import org.mapsforge.map.android.graphics.AndroidGraphicFactory
 import org.mapsforge.map.android.util.AndroidUtil
 import org.mapsforge.map.android.view.MapView
+import org.mapsforge.map.datastore.MultiMapDataStore
+import org.mapsforge.map.layer.overlay.FixedPixelCircle
+import org.mapsforge.core.graphics.Style
+import android.provider.OpenableColumns
 import org.mapsforge.map.layer.cache.TileCache
 import org.mapsforge.map.layer.renderer.TileRendererLayer
 import org.mapsforge.map.reader.MapFile
@@ -74,7 +78,11 @@ class QCarHomeActivity : Activity() {
     private var mediaProgress: ProgressBar? = null
     private var mapView: MapView? = null
     private var mapCache: TileCache? = null
-    private var mapData: MapFile? = null
+    private var mapData: MultiMapDataStore? = null
+    private var loadedMapCount = 0
+    private var locationDot: FixedPixelCircle? = null
+    private var locationHalo: FixedPixelCircle? = null
+    private var locationRim: FixedPixelCircle? = null
     private var mapStatus: TextView? = null
     private var lastGpsLocation: Location? = null
     private var lastCameraLocation: Location? = null
@@ -279,11 +287,8 @@ class QCarHomeActivity : Activity() {
         mapView = view
         view.setBuiltInZoomControls(false)
         parent.addView(view, flp())
-        if (File(filesDir, "offline-osm.map").exists()) {
-            loadOfflineMap()
-        } else {
-            showMapImportHint()
-        }
+        migrateOldMap()
+        loadOfflineMaps()
 
         val chooseMap = mapControl("MAP") { chooseOfflineMap() }
         chooseMap.textSize = 11f
@@ -335,7 +340,7 @@ class QCarHomeActivity : Activity() {
             background = rounded(Color.argb(235, 21, 21, 21), 5)
             setOnClickListener { click() }
             contentDescription = when (label) {
-                "MAP" -> "Import offline OpenStreetMap .map file"
+                "MAP" -> "Import additional offline OpenStreetMap maps"
                 "⊙" -> "Recenter map on my location"
                 "+" -> "Zoom in"
                 else -> "Zoom out"
@@ -345,7 +350,7 @@ class QCarHomeActivity : Activity() {
     private fun showMapImportHint() {
         val map = mapView ?: return
         if (mapStatus == null) {
-            val status = text("Tap MAP to import a Mapsforge offline .map file", 13f, white).apply {
+            val status = text("Tap MAP to import country .map files", 13f, white).apply {
                 setPadding(dp(12), dp(12), dp(12), dp(12))
                 background = rounded(Color.argb(226, 20, 20, 20))
                 setOnClickListener { chooseOfflineMap() }
@@ -358,92 +363,222 @@ class QCarHomeActivity : Activity() {
         mapStatus?.visibility = View.VISIBLE
     }
 
+    /** Installed offline regions survive launcher restarts and app updates. */
+    private fun mapFolder(): File = File(filesDir, "osm-maps").apply { mkdirs() }
+
+    private fun migrateOldMap() {
+        val old = File(filesDir, "offline-osm.map")
+        if (!old.exists()) return
+        var destination = File(mapFolder(), "previous-offline.map")
+        var suffix = 2
+        while (destination.exists()) {
+            destination = File(mapFolder(), "previous-offline-" + suffix++ + ".map")
+        }
+        if (!old.renameTo(destination))
+            Log.w("QCarOfflineMap", "Old map could not be moved into the multi-map library")
+    }
+
     private fun chooseOfflineMap() {
         if (mapFilePending) return
         try {
             val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "*/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             }
-            startActivityForResult(Intent.createChooser(intent, "Select Mapsforge .map file"), 310)
+            startActivityForResult(Intent.createChooser(intent, "Import offline country maps"), 310)
         } catch (_: Exception) {
             android.widget.Toast.makeText(
-                this, "Install a file manager to select an offline map",
+                this, "Install a file manager to import offline maps",
                 android.widget.Toast.LENGTH_LONG
             ).show()
         }
     }
 
-    @Deprecated("Used for file selection on Android 10 head units")
+    @Deprecated("Android 10 file picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 310 || resultCode != RESULT_OK) return
-        val uri: Uri = data?.data ?: return
+        if (requestCode != 310 || resultCode != RESULT_OK || data == null) return
+        val uris = mutableListOf<Uri>()
+        data.data?.let { uris.add(it) }
+        data.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
+        }
+        val selected = uris.distinct()
+        if (selected.isEmpty() || mapFilePending) return
         mapFilePending = true
-        mapStatus?.text = "Importing offline map…"
+        mapStatus?.text = "Importing maps..."
         showMapImportHint()
         Thread {
-            val dest = File(filesDir, "offline-osm.map")
-            val temp = File(filesDir, "offline-osm.map.tmp")
-            try {
-                contentResolver.openInputStream(uri)?.use { input ->
-                    temp.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
-                } ?: throw java.io.IOException("Cannot open selected map")
-                if (temp.length() < 512L) throw java.io.IOException("Invalid or empty .map file")
-                if (dest.exists()) dest.delete()
-                if (!temp.renameTo(dest)) throw java.io.IOException("Could not store map")
-                runOnUiThread {
-                    mapFilePending = false
-                    loadOfflineMap()
+            var imported = 0
+            var failed = 0
+            for (uri in selected) {
+                try {
+                    importCountryMap(uri)
+                    imported++
+                } catch (e: Exception) {
+                    failed++
+                    Log.w("QCarOfflineMap", "Import failed", e)
                 }
-            } catch (e: Exception) {
-                Log.w("QCarOfflineMap", "Map import failed", e)
-                temp.delete()
-                runOnUiThread {
-                    mapFilePending = false
-                    mapStatus?.text = "Map import failed. Tap to try again."
-                }
+            }
+            runOnUiThread {
+                mapFilePending = false
+                loadOfflineMaps()
+                android.widget.Toast.makeText(
+                    this, "Maps imported: " + imported + ", failed: " + failed,
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
             }
         }.start()
     }
 
-    private fun loadOfflineMap() {
-        val map = mapView ?: return
-        val file = File(filesDir, "offline-osm.map")
-        if (!file.exists()) { showMapImportHint(); return }
+    /** Stream potentially large maps without holding them in RAM. */
+    private fun importCountryMap(uri: Uri) {
+        val directory = mapFolder()
+        val temp = File.createTempFile("import-", ".tmp", directory)
         try {
-            map.layerManager.layers.clear()
-            mapCache?.destroy()
-            mapData?.close()
-            val data = MapFile(file)
+            contentResolver.openInputStream(uri)?.use { input ->
+                temp.outputStream().use { output -> input.copyTo(output, 65536) }
+            } ?: throw java.io.IOException("Map cannot be read")
+            if (temp.length() < 512L) throw java.io.IOException("Map is empty")
+            // Constructing MapFile validates Mapsforge format before it becomes permanent.
+            val probe = MapFile(temp)
+            try { probe.boundingBox() } finally { probe.close() }
+            var rawName = "country"
+            try {
+                contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor ->
+                        if (cursor.moveToFirst()) rawName = cursor.getString(0) ?: "country"
+                    }
+            } catch (_: Exception) { }
+            val safe = rawName.replace(Regex("(?i)\\.map$"), "")
+                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                .take(70).trim('.').ifBlank { "country" }
+            var target = File(directory, safe + ".map")
+            var count = 2
+            while (target.exists()) {
+                target = File(directory, safe + "-" + count++ + ".map")
+            }
+            if (!temp.renameTo(target)) throw java.io.IOException("Map could not be saved")
+        } finally {
+            if (temp.exists()) temp.delete()
+        }
+    }
+
+    /**
+     * Combine neighboring countries in a single render layer. DEDUPLICATE
+     * handles small overlaps around international borders.
+     */
+    private fun loadOfflineMaps() {
+        val map = mapView ?: return
+        val files = mapFolder().listFiles { file ->
+            file.isFile && file.extension.equals("map", true)
+        }?.sortedBy { it.name }.orEmpty()
+        if (files.isEmpty()) {
+            showMapImportHint()
+            return
+        }
+
+        val combined = MultiMapDataStore(MultiMapDataStore.DataPolicy.DEDUPLICATE)
+        var count = 0
+        try {
+            for (file in files) {
+                try {
+                    val reader = MapFile(file)
+                    try {
+                        combined.addMapDataStore(reader, count == 0, count == 0)
+                        count++
+                    } catch (e: Exception) {
+                        reader.close()
+                        throw e
+                    }
+                } catch (e: Exception) {
+                    Log.w("QCarOfflineMap", "Skipping map: " + file.name, e)
+                }
+            }
+            if (count == 0) {
+                combined.close()
+                mapStatus?.text = "No valid .map files. Tap MAP to import."
+                showMapImportHint()
+                return
+            }
+
             val cache = AndroidUtil.createTileCache(
-                this, "qcar-osm-cache", map.model.displayModel.tileSize, 0.45f,
+                this, "qcar-multimap-cache", map.model.displayModel.tileSize, 0.45f,
                 map.model.frameBufferModel.overdrawFactor
             )
             val layer = TileRendererLayer(
-                cache, data, map.model.mapViewPosition, AndroidGraphicFactory.INSTANCE
+                cache, combined, map.model.mapViewPosition, AndroidGraphicFactory.INSTANCE
             )
             layer.setXmlRenderTheme(MapsforgeThemes.MOTORIDER)
+
+            val previousCenter = if (loadedMapCount > 0)
+                map.model.mapViewPosition.center else null
+            val previousZoom = map.model.mapViewPosition.zoomLevel
+            // Remove old layers before closing their data stores.
+            map.layerManager.layers.clear()
+            mapCache?.destroy()
+            mapData?.close()
             map.layerManager.layers.add(layer)
             mapCache = cache
-            mapData = data
-            map.setCenter(data.startPosition())
-            map.setZoomLevel(data.startZoomLevel())
+            mapData = combined
+            loadedMapCount = count
+            if (previousCenter != null) {
+                map.setCenter(previousCenter)
+                map.setZoomLevel(previousZoom)
+            } else {
+                map.setCenter(combined.startPosition())
+                map.setZoomLevel(combined.startZoomLevel())
+            }
+            installPositionMarker(map)
             mapStatus?.visibility = View.GONE
             lastGpsLocation?.let { updateMapLocation(it, force = true) }
         } catch (e: Exception) {
-            Log.w("QCarOfflineMap", "Map load failed", e)
-            mapStatus?.text = "Unsupported map file. Tap MAP to choose another."
+            Log.w("QCarOfflineMap", "Could not load offline map library", e)
+            combined.close()
+            mapStatus?.text = "Unable to load maps. Tap MAP to retry."
             showMapImportHint()
         }
     }
 
+    /** Fixed-size blue dot with white rim and translucent accuracy halo. */
+    private fun installPositionMarker(map: MapView) {
+        val gps = lastGpsLocation
+        val position = gps?.let { LatLong(it.latitude, it.longitude) }
+        val paintHalo = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+            color = AndroidGraphicFactory.INSTANCE.createColor(Color.argb(80, 58, 146, 255))
+            style = Style.FILL
+        }
+        val paintWhite = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+            color = AndroidGraphicFactory.INSTANCE.createColor(Color.WHITE)
+            style = Style.FILL
+        }
+        val paintBlue = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+            color = AndroidGraphicFactory.INSTANCE.createColor(Color.rgb(37, 115, 245))
+            style = Style.FILL
+        }
+        val halo = FixedPixelCircle(position, 17f, paintHalo, null)
+        val rim = FixedPixelCircle(position, 10f, paintWhite, null)
+        val dot = FixedPixelCircle(position, 7f, paintBlue, null)
+        map.layerManager.layers.add(halo)
+        map.layerManager.layers.add(rim)
+        map.layerManager.layers.add(dot)
+        locationHalo = halo
+        locationDot = dot
+        locationRim = rim
+    }
+
     private fun updateMapLocation(location: Location, force: Boolean = false) {
         val map = mapView ?: return
-        if (mapData == null || (!followPosition && !force)) return
-        if (!force && lastCameraLocation?.distanceTo(location)?.let { it < 30f } == true) return
+        val point = LatLong(location.latitude, location.longitude)
+        locationDot?.setLatLong(point)
+        locationHalo?.setLatLong(point)
+        locationRim?.setLatLong(point)
+        map.layerManager.redrawLayers()
+        if (loadedMapCount == 0 || (!followPosition && !force)) return
+        if (!force && lastCameraLocation?.distanceTo(location)?.let { it < 20f } == true) return
         lastCameraLocation = Location(location)
-        map.setCenter(LatLong(location.latitude, location.longitude))
+        map.setCenter(point)
     }
 
     private fun centerMapOnMyLocation() {
@@ -784,6 +919,9 @@ class QCarHomeActivity : Activity() {
         mapView = null
         mapData = null
         mapCache = null
+        locationDot = null
+        locationHalo = null
+        locationRim = null
         AndroidGraphicFactory.clearResourceMemoryCache()
         super.onDestroy()
     }
