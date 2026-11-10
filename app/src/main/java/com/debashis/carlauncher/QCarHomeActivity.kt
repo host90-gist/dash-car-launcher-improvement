@@ -13,6 +13,12 @@ import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.GoogleMapOptions
+import com.google.android.gms.maps.MapView
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.MapStyleOptions
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -59,6 +65,12 @@ class QCarHomeActivity : Activity() {
     private var mediaArt: ImageView? = null
     private var mediaPlay: TextView? = null
     private var mediaProgress: ProgressBar? = null
+    private var mapView: MapView? = null
+    private var googleMap: GoogleMap? = null
+    private var lastGpsLocation: Location? = null
+    private var lastCameraLocation: Location? = null
+    private var followPosition = true
+    private var savedMapState: Bundle? = null
     private var lastLocationAt = 0L
     private var lastSpeedKmh = 0f
     private var manager: LocationManager? = null
@@ -69,6 +81,8 @@ class QCarHomeActivity : Activity() {
     private val locationListener = LocationListener { location: Location ->
         lastLocationAt = SystemClock.elapsedRealtime()
         lastSpeedKmh = if (location.speed < 0.833f) 0f else location.speed * 3.6f
+        lastGpsLocation = location
+        updateMapLocation(location)
         renderLocation()
     }
 
@@ -111,6 +125,7 @@ class QCarHomeActivity : Activity() {
         window.navigationBarColor = bg
         window.setBackgroundDrawableResource(android.R.color.black)
         manager = getSystemService(LOCATION_SERVICE) as? LocationManager
+        savedMapState = savedInstanceState?.getBundle("google_map_state")
         setContentView(buildDashboard())
         renderTime()
         renderLocation()
@@ -177,8 +192,7 @@ class QCarHomeActivity : Activity() {
         outer.addView(sidebar, lp(72, -1))
         rail(sidebar, "⌂", "HOME") { /* Already home */ }
         rail(sidebar, "▦", "APPS") { launchNoAnimation(Intent(this, DrawerActivity::class.java)) }
-        rail(sidebar, "⌖", "MAPS") { openGoogleMaps() }
-        rail(sidebar, "♫", "MUSIC") { openPoweramp() }
+        rail(sidebar, "⌖", "MAPS") { centerMapOnMyLocation() }
         rail(sidebar, "⚙", "SET") { launchNoAnimation(Intent(this, SettingsActivity::class.java)) }
 
         val main = column().apply { gravity = Gravity.TOP; setBackgroundColor(bg) }
@@ -186,7 +200,7 @@ class QCarHomeActivity : Activity() {
 
         val dashboard = row().apply { gravity = Gravity.TOP }
         main.addView(dashboard, LinearLayout.LayoutParams(-1, 0, 1f))
-        val navigation = card().apply { setOnClickListener { openGoogleMaps() } }
+        val navigation = card()
         dashboard.addView(navigation, inset(navigation, 0, -1, 7f))
         buildNavigation(navigation)
 
@@ -218,31 +232,145 @@ class QCarHomeActivity : Activity() {
         })
     }
 
+    /**
+     * QCarLauncherPreview embeds a Google Map (SupportMapFragment).
+     * Here MapView is used instead because this launcher is a plain Activity,
+     * without AppCompat/AndroidX fragments. The map remains a real, pannable
+     * and zoomable Google Map inside the QCar navigation tile.
+     */
     private fun buildNavigation(parent: FrameLayout) {
-        // Static abstract grid: intentionally NOT a fake live map or a WebView.
-        parent.addView(RoadGridView(this), flp())
-        val overlay = column().apply {
-            gravity = Gravity.TOP
-            setPadding(dp(18), dp(14), dp(18), dp(10))
+        if (hasMapsApiKey()) {
+            try {
+                val options = GoogleMapOptions().mapType(GoogleMap.MAP_TYPE_NORMAL)
+                    .zoomControlsEnabled(false).compassEnabled(false)
+                val view = MapView(this, options)
+                mapView = view
+                parent.addView(view, flp())
+                view.onCreate(savedMapState)
+                view.getMapAsync { ready ->
+                    googleMap = ready
+                    ready.mapType = GoogleMap.MAP_TYPE_NORMAL
+                    ready.uiSettings.isMapToolbarEnabled = false
+                    ready.uiSettings.isCompassEnabled = false
+                    ready.uiSettings.isZoomControlsEnabled = false
+                    ready.uiSettings.isMyLocationButtonEnabled = false
+                    try {
+                        ready.setMapStyle(MapStyleOptions.loadRawResourceStyle(this, R.raw.qcar_map_dark))
+                    } catch (_: Exception) { /* Keep normal tiles if styling is unavailable. */ }
+                    ready.setOnCameraMoveStartedListener { reason ->
+                        if (reason == GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) {
+                            followPosition = false
+                        }
+                    }
+                    lastGpsLocation?.let { updateMapLocation(it, force = true) }
+                }
+            } catch (_: Exception) {
+                mapView = null
+                showMapPlaceholder(parent, "Google Maps could not initialize")
+            }
+        } else {
+            showMapPlaceholder(parent, "Configure MAPS_API_KEY to show the live Google Map")
         }
-        parent.addView(overlay, flp())
-        val heading = row()
-        heading.addView(text("NAVIGATION", 13f, white, true),
-            LinearLayout.LayoutParams(0, dp(34), 1f))
-        heading.addView(text("⌖", 26f, white), lp(40, 34))
-        overlay.addView(heading, lp(-1, 42))
-        overlay.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
-        speedView = text("--", 56f, white, true)
-        overlay.addView(speedView, lp(-1, 58))
-        overlay.addView(text("km/h   •   GPS SPEED", 12f, muted), lp(-1, 25))
-        val open = text("OPEN GOOGLE MAPS  ›", 17f, white, true).apply {
-            background = rounded(accent, 5)
-            setOnClickListener { openGoogleMaps() }
+
+        // QCar-style controls overlay; the rest of the panel retains full map gestures.
+        val compass = mapControl("⌖") {
+            googleMap?.let { map ->
+                map.moveCamera(CameraUpdateFactory.newCameraPosition(
+                    com.google.android.gms.maps.model.CameraPosition.Builder(map.cameraPosition)
+                        .bearing(0f).tilt(0f).build()
+                ))
+            }
         }
-        overlay.addView(open, LinearLayout.LayoutParams(-1, dp(54)).apply {
+        parent.addView(compass, flp(39, 39, Gravity.TOP or Gravity.LEFT).apply {
+            leftMargin = dp(12)
             topMargin = dp(12)
-            bottomMargin = dp(8)
         })
+
+        val recenter = mapControl("⊙") { centerMapOnMyLocation() }
+        parent.addView(recenter, flp(39, 39, Gravity.TOP or Gravity.RIGHT).apply {
+            rightMargin = dp(12)
+            topMargin = dp(12)
+        })
+
+        val zoom = column()
+        zoom.addView(mapControl("+") { googleMap?.animateCamera(null) }, lp(1, 1))
+        zoom.removeAllViews()
+        zoom.addView(mapControl("+") {
+            googleMap?.moveCamera(CameraUpdateFactory.zoomIn())
+        }, lp(39, 39))
+        zoom.addView(mapControl("−") {
+            googleMap?.moveCamera(CameraUpdateFactory.zoomOut())
+        }, lp(39, 39))
+        parent.addView(zoom, flp(41, 84, Gravity.RIGHT or Gravity.BOTTOM).apply {
+            rightMargin = dp(12)
+            bottomMargin = dp(12)
+        })
+
+        val bubble = column().apply {
+            setPadding(dp(5), dp(4), dp(5), dp(4))
+            background = rounded(Color.argb(230, 0, 0, 0), 25)
+        }
+        speedView = text("--", 23f, white, true)
+        bubble.addView(speedView, lp(-1, 34))
+        bubble.addView(text("km/h", 10f, muted), lp(-1, 15))
+        parent.addView(bubble, flp(61, 61, Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM).apply {
+            bottomMargin = dp(12)
+        })
+    }
+
+    private fun mapControl(label: String, click: () -> Unit): TextView =
+        text(label, 24f, white, true).apply {
+            background = rounded(Color.argb(235, 21, 21, 21), 5)
+            setOnClickListener { click() }
+            isFocusable = true
+            contentDescription = when (label) {
+                "+" -> "Zoom in"
+                "−" -> "Zoom out"
+                "⊙" -> "Center on my location"
+                else -> "Reset compass"
+            }
+        }
+
+    private fun showMapPlaceholder(parent: FrameLayout, message: String) {
+        parent.addView(FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(21, 27, 34))
+            val label = text(message, 14f, muted).apply {
+                setPadding(dp(18), dp(18), dp(18), dp(18))
+            }
+            addView(label, flp(-1, -2, Gravity.CENTER))
+        }, flp())
+    }
+
+    private fun hasMapsApiKey(): Boolean = try {
+        val info = packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
+        !info.metaData?.getString("com.google.android.geo.API_KEY").isNullOrBlank()
+    } catch (_: Exception) { false }
+
+    private fun updateMapLocation(location: Location, force: Boolean = false) {
+        val map = googleMap ?: return
+        if (!followPosition && !force) return
+        val previous = lastCameraLocation
+        if (!force && previous != null && previous.distanceTo(location) < 30f) return
+        lastCameraLocation = Location(location)
+        map.moveCamera(CameraUpdateFactory.newLatLngZoom(
+            LatLng(location.latitude, location.longitude),
+            if (force) 16f else map.cameraPosition.zoom.coerceAtLeast(15f)
+        ))
+    }
+
+    private fun centerMapOnMyLocation() {
+        followPosition = true
+        val last = lastGpsLocation
+        if (last != null) updateMapLocation(last, force = true)
+        else if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED) {
+            try {
+                manager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let {
+                    lastGpsLocation = it
+                    updateMapLocation(it, force = true)
+                }
+            } catch (_: SecurityException) { }
+        }
     }
 
     private fun addVehicle(parent: LinearLayout) {
@@ -354,17 +482,6 @@ class QCarHomeActivity : Activity() {
         startActivity(intent)
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
-    }
-
-    private fun openGoogleMaps() {
-        // Launch the real Google Maps app. An in-app GoogleMap requires
-        // Play Services, a Maps SDK dependency and an API key, none of which
-        // is bundled with this deliberately lightweight launcher.
-        val intent = packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
-        if (intent != null) launchNoAnimation(intent)
-        else android.widget.Toast.makeText(
-            this, "Google Maps is not installed", android.widget.Toast.LENGTH_SHORT
-        ).show()
     }
 
     private fun openPoweramp() {
@@ -479,6 +596,7 @@ class QCarHomeActivity : Activity() {
             addAction(Intent.ACTION_TIME_CHANGED)
             addAction(Intent.ACTION_TIMEZONE_CHANGED)
         })
+        mapView?.onStart()
         startGps()
         startMedia()
         handler.post(tick)
@@ -486,6 +604,7 @@ class QCarHomeActivity : Activity() {
 
     override fun onStop() {
         handler.removeCallbacks(tick)
+        mapView?.onStop()
         stopGps()
         stopMedia()
         unregisterReceiver(timeReceiver)
@@ -494,8 +613,32 @@ class QCarHomeActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        mapView?.onResume()
         renderTime()
         renderLocation()
+    }
+
+    override fun onPause() {
+        mapView?.onPause()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        mapView?.onDestroy()
+        googleMap = null
+        super.onDestroy()
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        mapView?.onLowMemory()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        val mapState = Bundle()
+        mapView?.onSaveInstanceState(mapState)
+        outState.putBundle("google_map_state", mapState)
+        super.onSaveInstanceState(outState)
     }
 
     @Deprecated("Use gesture navigation")
@@ -503,39 +646,4 @@ class QCarHomeActivity : Activity() {
         // HOME is the bottom of the task stack.
     }
 
-    /**
-     * One static lightweight decorative backdrop. It's NOT a navigation map.
-     * A tap always launches the real Google Maps app.
-     */
-    private class RoadGridView(context: Context) : View(context) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val w = width.toFloat()
-            val h = height.toFloat()
-            canvas.drawColor(Color.rgb(17, 20, 23))
-            paint.strokeWidth = 1f * resources.displayMetrics.density
-            paint.color = Color.rgb(38, 43, 49)
-            for (i in 0..12) {
-                val x = i * w / 12
-                canvas.drawLine(x, 0f, x, h, paint)
-            }
-            for (i in 0..9) {
-                val y = i * h / 9
-                canvas.drawLine(0f, y, w, y, paint)
-            }
-            paint.strokeWidth = 9f * resources.displayMetrics.density
-            paint.color = Color.rgb(46, 49, 52)
-            val road = Path().apply {
-                moveTo(-w * .1f, h * .7f)
-                cubicTo(w * .22f, h * .38f, w * .42f, h * .84f, w * 1.1f, h * .19f)
-            }
-            canvas.drawPath(road, paint)
-            paint.strokeWidth = 2f * resources.displayMetrics.density
-            paint.color = Color.rgb(87, 92, 97)
-            canvas.drawPath(road, paint)
-            paint.color = Color.rgb(177, 46, 46)
-            canvas.drawCircle(w * .5f, h * .5f, 6f * resources.displayMetrics.density, paint)
-        }
-    }
 }
