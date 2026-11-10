@@ -484,6 +484,219 @@ class QCarHomeActivity : Activity() {
             }
         }
 
+    private fun navDataFolder(): File = File(filesDir, "navigation-data").apply { mkdirs() }
+
+    private fun chooseDataImport(request: Int) {
+        if (dataImportPending || mapFilePending) return
+        try {
+            startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "*/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }, request)
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this,
+                "File manager unavailable", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Import a route or camera database to app-private storage; keep across updates. */
+    private fun importNavigationData(uri: Uri, code: Int) {
+        dataImportPending = true
+        showMapStatus(if (code == 311) "Importing GPX route..." else "Importing POIs...")
+        Thread {
+            var error: String? = null
+            var confirmation = ""
+            val folder = navDataFolder()
+            val temporary = File.createTempFile("nav-import", ".tmp", folder)
+            try {
+                val name = try {
+                    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME),
+                        null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    }
+                } catch (_: Exception) { null } ?: uri.lastPathSegment.orEmpty()
+                val isGpx = name.endsWith(".gpx", true)
+                val isCsv = name.endsWith(".csv", true) ||
+                    name.endsWith(".txt", true)
+                if (code == 311 && !isGpx)
+                    throw IllegalArgumentException("Choose a .gpx route file")
+                if (code == 312 && !isGpx && !isCsv)
+                    throw IllegalArgumentException("Choose a .gpx or .csv POI file")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    temporary.outputStream().use { output ->
+                        val buffer = ByteArray(65536)
+                        var copied = 0L
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            copied += n
+                            if (copied > 80L * 1024L * 1024L)
+                                throw IllegalArgumentException("Maximum import size is 80 MB")
+                            output.write(buffer, 0, n)
+                        }
+                    }
+                } ?: throw java.io.IOException("File not readable")
+                if (code == 311) {
+                    val parsed = temporary.inputStream().use {
+                        OfflineNavigationData.parseGpx(it)
+                    }
+                    if (parsed.pointCount < 2)
+                        throw IllegalArgumentException("GPX has no track or route line")
+                    confirmation = "GPX route loaded: " + parsed.pointCount + " points"
+                } else {
+                    val points = if (isGpx)
+                        temporary.inputStream().use { OfflineNavigationData.parseGpx(it).waypoints }
+                    else OfflineNavigationData.parsePoiCsv(temporary)
+                    if (points.isEmpty()) throw IllegalArgumentException(
+                        "No GPS waypoints / camera points found")
+                    confirmation = "POIs loaded: " + points.size
+                }
+                val destination = File(folder, if (code == 311) "route.gpx"
+                    else if (isGpx) "cameras.gpx" else "cameras.csv")
+                if (code == 312) {
+                    File(folder, if (isGpx) "cameras.csv" else "cameras.gpx").delete()
+                }
+                temporary.copyTo(destination, overwrite = true)
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                Log.e("QCarOfflineNav", "Navigation import failed", e)
+            } finally {
+                temporary.delete()
+            }
+            val failed = error
+            val message = confirmation
+            runOnUiThread {
+                dataImportPending = false
+                if (failed != null) {
+                    showMapStatus("Import error: " + failed)
+                } else {
+                    restoreNavigationOverlays()
+                    if (loadedMapCount > 0) mapStatus?.visibility = View.GONE
+                    android.widget.Toast.makeText(
+                        this, message, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun restoreNavigationOverlays() {
+        routeSegments.clear()
+        poiData.clear()
+        val directory = navDataFolder()
+        val routeFile = File(directory, "route.gpx")
+        if (routeFile.exists()) {
+            try {
+                val parsed = routeFile.inputStream().use { OfflineNavigationData.parseGpx(it) }
+                routeSegments.addAll(parsed.segments)
+            } catch (e: Exception) {
+                Log.w("QCarOfflineNav", "Bad saved GPX route", e)
+            }
+        }
+        val poiGpx = File(directory, "cameras.gpx")
+        val poiCsv = File(directory, "cameras.csv")
+        try {
+            if (poiGpx.exists()) {
+                poiData.addAll(poiGpx.inputStream().use {
+                    OfflineNavigationData.parseGpx(it).waypoints
+                })
+            } else if (poiCsv.exists()) {
+                poiData.addAll(OfflineNavigationData.parsePoiCsv(poiCsv))
+            }
+        } catch (e: Exception) {
+            Log.w("QCarOfflineNav", "Bad saved POIs", e)
+        }
+        drawNavigationOverlays()
+    }
+
+    /** Reinstall overlays after .map changes reset the map layer stack. */
+    private fun drawNavigationOverlays() {
+        val map = mapView ?: return
+        for (old in overlayLayers) {
+            try { map.layerManager.layers.remove(old) } catch (_: Exception) { }
+        }
+        overlayLayers.clear()
+        if (loadedMapCount < 1) return
+        val routePaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+            setColor(Color.rgb(24, 113, 252))
+            setStyle(Style.STROKE)
+            setStrokeWidth(dp(5).toFloat())
+        }
+        for (segment in routeSegments.take(60)) {
+            val step = (segment.size / 12000).coerceAtLeast(1)
+            val simplified = if (step == 1) segment
+                else segment.filterIndexed { index, _ -> index % step == 0 } +
+                    listOf(segment.last())
+            if (simplified.size > 1) {
+                val line = Polyline(routePaint, AndroidGraphicFactory.INSTANCE)
+                line.setPoints(simplified)
+                map.layerManager.layers.add(line)
+                overlayLayers.add(line)
+            }
+        }
+        val poiPaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+            setColor(Color.rgb(242, 180, 34))
+            setStyle(Style.FILL)
+        }
+        val origin = lastGpsLocation
+        val visible = if (origin == null) poiData.take(350)
+            else poiData.sortedBy { poi ->
+                val location = Location("poi").apply {
+                    latitude = poi.point.latitude
+                    longitude = poi.point.longitude
+                }
+                origin.distanceTo(location)
+            }.take(350)
+        for (poi in visible) {
+            val circle = FixedPixelCircle(poi.point, 6f, poiPaint, null)
+            map.layerManager.layers.add(circle)
+            overlayLayers.add(circle)
+        }
+        map.layerManager.redrawLayers()
+    }
+
+    private fun updateSpeedZoom(location: Location, force: Boolean = false) {
+        if (!Prefs.prefs(this).getBoolean("qcar_speed_zoom", false) ||
+            loadedMapCount < 1 || !location.hasSpeed()) return
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - autoZoomLastAt < 12000L) return
+        val kmh = location.speed * 3.6f
+        val zoom = when {
+            kmh < 12f -> 17
+            kmh < 35f -> 16
+            kmh < 70f -> 15
+            kmh < 105f -> 14
+            else -> 13
+        }
+        mapView?.let { map ->
+            if (map.model.mapViewPosition.zoomLevel.toInt() != zoom)
+                map.setZoomLevel(zoom.toByte())
+        }
+        autoZoomLastAt = now
+    }
+
+    /** Offline warning for a nearby imported fixed POI, not live reporting. */
+    private fun alertNearbyCameras(location: Location) {
+        if (poiData.isEmpty() || !location.hasSpeed() || location.speed < 2.0f) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastPoiAlertAt < 90000L) return
+        val closest = poiData.asSequence().map { poi ->
+            val target = Location("poi").apply {
+                latitude = poi.point.latitude
+                longitude = poi.point.longitude
+            }
+            poi to location.distanceTo(target)
+        }.filter { it.second < 350f }.minByOrNull { it.second } ?: return
+        val key = closest.first.title + closest.first.point.toString()
+        if (key == lastPoiAlertKey && now - lastPoiAlertAt < 300000L) return
+        lastPoiAlertAt = now
+        lastPoiAlertKey = key
+        android.widget.Toast.makeText(
+            this, "Camera / POI nearby: " + closest.first.title.take(35) +
+                " (" + closest.second.toInt() + "m)",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
+    }
+
     private fun showMapStatus(message: String) {
         val map = mapView ?: return
         if (mapStatus == null) {
@@ -542,6 +755,11 @@ class QCarHomeActivity : Activity() {
     @Deprecated("Android 10 file picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode in 311..312) {
+            if (resultCode == RESULT_OK && data?.data != null)
+                importNavigationData(data.data!!, requestCode)
+            return
+        }
         if (requestCode != 310 || resultCode != RESULT_OK || data == null) return
         val uris = mutableListOf<Uri>()
         data.data?.let { uris.add(it) }
@@ -1194,6 +1412,7 @@ class QCarHomeActivity : Activity() {
         mapView = null
         mapData = null
         mapCache = null
+        overlayLayers.clear()
         locationDot = null
         locationHalo = null
         locationRim = null
