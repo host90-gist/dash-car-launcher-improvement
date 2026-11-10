@@ -772,13 +772,45 @@ class SettingsActivity : Activity() {
         } catch (e: PackageManager.NameNotFoundException) {
             "1.0"
         }
-        addInfo(group, "Dash", "Version $version")
+        addInfo(group, "QCarDash", "Version $version")
+        addInfo(group, "Stock firmware version", HeadUnitSettingsBridge.firmwareVersion())
+        addInfo(group, "MCU", HeadUnitSettingsBridge.mcuVersion())
+        addInfo(group, "Device info", HeadUnitSettingsBridge.deviceInfo(this))
         addInfo(group, "Screen", "${resources.displayMetrics.widthPixels} x " +
                 "${resources.displayMetrics.heightPixels} at ${resources.displayMetrics.densityDpi} dpi")
         addInfo(group, "Android", android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT + ")")
         addInfo(group, "Device", android.os.Build.MODEL + " / " + android.os.Build.BOARD)
-        addInfo(group, "Source", "github.com/debashisn94/dash-car-launcher")
+        addInfo(group, "Source", "github.com/host90-gist/dash-car-launcher-improvement")
         content.addView(group)
+
+        val factory = newGroup()
+        val settings = newRow(factory)
+        settings.findViewById<TextView>(R.id.row_title).text = "Factory settings"
+        settings.findViewById<TextView>(R.id.row_sub).text =
+            "Open original firmware settings (does not send MCU commands)"
+        settings.setOnClickListener { openStockSettings("factory settings") }
+        factory.addView(settings)
+
+        val reset = newRow(factory)
+        reset.findViewById<TextView>(R.id.row_title).text = "Factory data reset"
+        reset.findViewById<TextView>(R.id.row_sub).text =
+            "Open Android reset options (requires confirmation in system Settings)"
+        reset.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Factory data reset")
+                .setMessage("A factory reset erases apps and user data. QCarDash will " +
+                    "only open Android Settings, never reset the device itself.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Open Android settings") { _, _ ->
+                    if (!HeadUnitSettingsBridge.openFactoryResetOptions(this)) {
+                        Toast.makeText(this, "System reset options unavailable", Toast.LENGTH_LONG).show()
+                    }
+                }.show()
+        }
+        factory.addView(reset)
+        content.addView(spacer())
+        content.addView(header("Factory"))
+        content.addView(factory)
     }
 
     // ----------------------------------------------------------- small parts
