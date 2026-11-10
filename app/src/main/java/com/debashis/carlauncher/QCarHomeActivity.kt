@@ -692,12 +692,13 @@ class QCarHomeActivity : Activity() {
         }
         // Respect POI removals and ordering without modifying the source files.
         val savedPoints = ArrayList<Pair<String, OfflineNavigationData.Poi>>()
+        val hiddenPoiKeys = SavedNavigationOrder.hiddenPoiKeys(this)
         for (file in savedPoiFiles().take(40)) {
             try {
                 readPoiFile(file).forEachIndexed { index, poi ->
                     val key = SavedNavigationOrder.pointKey(file.name, index)
                     if (savedPoints.size < 12000 &&
-                        !SavedNavigationOrder.isPoiHidden(this, key)) {
+                        key !in hiddenPoiKeys) {
                         savedPoints.add(key to poi)
                     }
                 }
