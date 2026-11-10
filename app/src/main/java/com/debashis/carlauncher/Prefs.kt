@@ -30,6 +30,7 @@ object Prefs {
     const val KEY_SETUP_SHOWN = "setup_shown"
     const val KEY_CLOCK_FORMAT = "clock_format"   // -1 follow system, 12, or 24
     const val KEY_UNITS = "units"                 // "kmh" or "mph"
+    const val KEY_DOCK_LABELS = "qcar_dock_labels" // false = icon-only dock
 
     const val CLOCK_SYSTEM = -1
 
@@ -104,6 +105,13 @@ object Prefs {
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+
+    fun dockLabelsVisible(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DOCK_LABELS, false)
+
+    fun setDockLabelsVisible(context: Context, visible: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DOCK_LABELS, visible).apply()
+    }
 
     // ------------------------------------------------------------------ dock
 
