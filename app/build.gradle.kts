@@ -23,8 +23,11 @@ android {
         // The head unit is Android 11 / SDK 30 exactly. No compatibility shims needed.
         minSdk = 29
         targetSdk = 30
-        versionCode = 3
-        versionName = "1.2"
+        // Each GitHub Actions build gets a higher versionCode, allowing Android
+        // package manager to install it as an update over the previous build.
+        val ciRun = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        versionCode = if (ciRun != null) 1000 + ciRun else 3
+        versionName = if (ciRun != null) "1.2.$ciRun" else "1.2"
     }
 
     signingConfigs {
@@ -39,6 +42,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // CI uses the same user-owned key for every test APK, instead of
+            // GitHub's ephemeral ~/.android/debug.keystore.
+            // Local debug builds without keystore.properties still work.
+            if (keystoreProps.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
         release {
             isMinifyEnabled = false
             if (keystoreProps.isNotEmpty()) {
