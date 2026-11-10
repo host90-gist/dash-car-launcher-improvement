@@ -1,0 +1,554 @@
+package com.debashis.carlauncher
+
+import android.Manifest
+import android.app.Activity
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.BroadcastReceiver
+import android.content.pm.PackageManager
+import android.graphics.*
+import android.graphics.drawable.GradientDrawable
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.roundToInt
+
+/**
+ * QCar-inspired dashboard implemented with framework Views.
+ *
+ * Based on the layout structure and color/spacing measurements of QCarLauncherPreview:
+ * a narrow left navigation rail; a large navigation panel; vehicle, AdBlue,
+ * outside temperature and clock along the top right; music below.
+ *
+ * No Compose, map SDK, animated transitions, drawing loops or third-party libraries.
+ * Unavailable CAN data is always shown as unavailable, not made up.
+ */
+class QCarHomeActivity : Activity() {
+    private val bg = Color.rgb(0, 0, 0)
+    private val cardColor = Color.argb(230, 14, 14, 14)
+    private val accent = Color.rgb(177, 46, 46) // QCarLauncher #b12e2e
+    private val white = Color.WHITE
+    private val muted = Color.rgb(174, 174, 174)
+    private val handler = Handler(Looper.getMainLooper())
+    private var speedView: TextView? = null
+    private var gpsView: TextView? = null
+    private var clockView: TextView? = null
+    private var dateView: TextView? = null
+    private var mediaTitle: TextView? = null
+    private var mediaArtist: TextView? = null
+    private var mediaArt: ImageView? = null
+    private var mediaPlay: TextView? = null
+    private var mediaProgress: ProgressBar? = null
+    private var lastLocationAt = 0L
+    private var lastSpeedKmh = 0f
+    private var manager: LocationManager? = null
+    private var sessionManager: MediaSessionManager? = null
+    private var mediaController: MediaController? = null
+    private var sessionRegistered = false
+
+    private val locationListener = LocationListener { location: Location ->
+        lastLocationAt = SystemClock.elapsedRealtime()
+        lastSpeedKmh = if (location.speed < 0.833f) 0f else location.speed * 3.6f
+        renderLocation()
+    }
+
+    private val sessionsChanged =
+        MediaSessionManager.OnActiveSessionsChangedListener { selectSession(it) }
+
+    private val mediaCallback = object : MediaController.Callback() {
+        override fun onMetadataChanged(metadata: MediaMetadata?) = renderMedia()
+        override fun onPlaybackStateChanged(state: PlaybackState?) = renderMedia()
+        override fun onSessionDestroyed() {
+            mediaController = null
+            renderMedia()
+        }
+    }
+
+    private val timeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = renderTime()
+    }
+
+    private val tick = object : Runnable {
+        override fun run() {
+            renderTime()
+            renderLocation()
+            renderMediaProgress()
+            handler.postDelayed(this, 1000L)
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
+        window.setBackgroundDrawableResource(android.R.color.black)
+        manager = getSystemService(LOCATION_SERVICE) as? LocationManager
+        setContentView(buildDashboard())
+        renderTime()
+        renderLocation()
+        renderMedia()
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 109)
+    }
+
+    private fun dp(v: Int): Int = (resources.displayMetrics.density * v).roundToInt()
+
+    private fun rounded(color: Int, radius: Int = 6): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+        }
+
+    private fun text(value: String, size: Float, color: Int = white, bold: Boolean = false): TextView =
+        TextView(this).apply {
+            this.text = value
+            textSize = size
+            setTextColor(color)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            if (bold) typeface = android.graphics.Typeface.create("sans-serif-medium", 0)
+            maxLines = 2
+        }
+
+    private fun lp(w: Int = -1, h: Int = -1) = LinearLayout.LayoutParams(
+        if (w < 0) w else dp(w), if (h < 0) h else dp(h)
+    )
+    private fun flp(w: Int = -1, h: Int = -1, gravity: Int = Gravity.TOP) =
+        FrameLayout.LayoutParams(if (w < 0) w else dp(w), if (h < 0) h else dp(h), gravity)
+
+    private fun weighted(weight: Float) = LinearLayout.LayoutParams(0, -1, weight)
+    private fun weightedHeight(weight: Float) = LinearLayout.LayoutParams(-1, 0, weight)
+
+    private fun row(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+    private fun column(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+    }
+    private fun card(): FrameLayout = FrameLayout(this).apply {
+        background = rounded(cardColor)
+        clipToOutline = true
+    }
+
+    private fun inset(view: View, width: Int = -1, height: Int = -1, weight: Float? = null): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(
+            if (width == -1) -1 else if (width == 0) 0 else dp(width),
+            if (height == -1) -1 else if (height == 0) 0 else dp(height),
+            weight ?: 0f
+        ).apply { setMargins(dp(5), dp(5), dp(5), dp(5)) }
+
+    private fun buildDashboard(): View {
+        val outer = row().apply { setBackgroundColor(bg); gravity = Gravity.TOP }
+        val sidebar = column().apply {
+            setBackgroundColor(Color.rgb(7, 7, 7))
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(4), dp(10), dp(4), dp(9))
+        }
+        outer.addView(sidebar, lp(72, -1))
+        rail(sidebar, "⌂", "HOME") { /* Already home */ }
+        rail(sidebar, "▦", "APPS") { startActivity(Intent(this, DrawerActivity::class.java)) }
+        rail(sidebar, "⌖", "WAZE") { openWaze() }
+        rail(sidebar, "♫", "MUSIC") { openPoweramp() }
+        rail(sidebar, "♧", "GPS") {
+            GpsControl.toggleOrOpenSettings(this)
+        }
+        rail(sidebar, "⚙", "SET") { startActivity(Intent(this, SettingsActivity::class.java)) }
+
+        val main = column().apply { gravity = Gravity.TOP; setBackgroundColor(bg) }
+        outer.addView(main, LinearLayout.LayoutParams(0, -1, 1f))
+
+        val status = row().apply {
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+            setBackgroundColor(bg)
+            setPadding(dp(10), 0, dp(16), 0)
+        }
+        status.addView(text("QCAR DASH  •  ANDROID 10", 11f, muted), lp(-2, 25))
+        main.addView(status, lp(-1, 28))
+
+        val dashboard = row().apply { gravity = Gravity.TOP }
+        main.addView(dashboard, LinearLayout.LayoutParams(-1, 0, 1f))
+        val navigation = card().apply { setOnClickListener { openWaze() } }
+        dashboard.addView(navigation, inset(navigation, 0, -1, 7f))
+        buildNavigation(navigation)
+
+        val right = column().apply { gravity = Gravity.TOP }
+        dashboard.addView(right, LinearLayout.LayoutParams(0, -1, 13f))
+        val upper = row().apply { gravity = Gravity.TOP }
+        right.addView(upper, weightedHeight(0.36f))
+        addVehicle(upper)
+        addAdBlue(upper)
+        addTemperature(upper)
+        addClock(upper)
+
+        val musicCard = card()
+        right.addView(musicCard, inset(musicCard, -1, 0, 0.64f))
+        buildMusic(musicCard)
+        return outer
+    }
+
+    private fun rail(parent: LinearLayout, symbol: String, label: String, onClick: () -> Unit) {
+        val item = column().apply {
+            background = rounded(if (label == "HOME") Color.rgb(45, 18, 18) else Color.TRANSPARENT)
+            setOnClickListener { onClick() }
+        }
+        val sym = text(symbol, 26f, if (label == "HOME") accent else white)
+        item.addView(sym, lp(58, 43))
+        item.addView(text(label, 10f, muted, true), lp(58, 18))
+        parent.addView(item, LinearLayout.LayoutParams(-1, 0, 1f).apply {
+            setMargins(0, dp(5), 0, dp(5))
+        })
+    }
+
+    private fun buildNavigation(parent: FrameLayout) {
+        // Static abstract grid: intentionally NOT a fake live map or a WebView.
+        parent.addView(RoadGridView(this), flp())
+        val overlay = column().apply {
+            gravity = Gravity.TOP
+            setPadding(dp(18), dp(14), dp(18), dp(10))
+        }
+        parent.addView(overlay, flp())
+        val heading = row()
+        heading.addView(text("NAVIGATION", 13f, white, true),
+            LinearLayout.LayoutParams(0, dp(34), 1f))
+        heading.addView(text("⌖", 26f, white), lp(40, 34))
+        overlay.addView(heading, lp(-1, 42))
+        overlay.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+        speedView = text("--", 56f, white, true)
+        overlay.addView(speedView, lp(-1, 58))
+        overlay.addView(text("km/h   •   GPS SPEED", 12f, muted), lp(-1, 25))
+        val open = text("OPEN WAZE  ›", 17f, white, true).apply {
+            background = rounded(accent, 5)
+            setOnClickListener { openWaze() }
+        }
+        overlay.addView(open, LinearLayout.LayoutParams(-1, dp(54)).apply {
+            topMargin = dp(12)
+            bottomMargin = dp(8)
+        })
+    }
+
+    private fun addVehicle(parent: LinearLayout) {
+        val box = card()
+        parent.addView(box, inset(box, 0, -1, 4f))
+        val content = column().apply {
+            setPadding(dp(8), dp(12), dp(8), dp(12))
+            gravity = Gravity.CENTER
+        }
+        box.addView(content, flp())
+        content.addView(text("VEHICLE", 12f, muted, true), lp(-1, 30))
+        content.addView(text("P", 34f, white, true), LinearLayout.LayoutParams(-1, 0, 1f))
+        content.addView(text("GEAR  —", 12f, muted), lp(-1, 25))
+        content.addView(text("RPM  —     °C  —", 12f, muted), lp(-1, 28))
+    }
+
+    private fun addAdBlue(parent: LinearLayout) {
+        val box = card()
+        parent.addView(box, inset(box, 0, -1, 2.5f))
+        val content = column().apply { setPadding(dp(5), dp(8), dp(5), dp(8)) }
+        box.addView(content, flp())
+        content.addView(text("ADBLUE", 13f, white, true), lp(-1, 35))
+        content.addView(text("◈", 35f, accent), LinearLayout.LayoutParams(-1, 0, 1f))
+        content.addView(text("—", 29f, white, true), lp(-1, 35))
+        content.addView(text("CAN DATA PENDING", 10f, muted), lp(-1, 25))
+    }
+
+    private fun addTemperature(parent: LinearLayout) {
+        val box = card()
+        parent.addView(box, inset(box, 0, -1, 3f))
+        val content = column()
+        box.addView(content, flp())
+        content.addView(text("OUTSIDE", 12f, muted, true), lp(-1, 30))
+        content.addView(text("—", 46f, white), LinearLayout.LayoutParams(-1, 0, 1f))
+        content.addView(text("°C", 17f, muted), lp(-1, 35))
+    }
+
+    private fun addClock(parent: LinearLayout) {
+        val box = card()
+        parent.addView(box, inset(box, 0, -1, 4f))
+        val content = column().apply { setPadding(dp(6), dp(10), dp(6), dp(10)) }
+        box.addView(content, flp())
+        clockView = text("--:--", 44f, white)
+        dateView = text("", 15f, muted)
+        content.addView(clockView, LinearLayout.LayoutParams(-1, 0, 1f))
+        content.addView(dateView, lp(-1, 45))
+        gpsView = text("GPS • CHECK", 12f, muted).apply {
+            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_qcar_gps, 0, 0, 0)
+            compoundDrawablePadding = dp(5)
+            setOnClickListener { GpsControl.toggleOrOpenSettings(this@QCarHomeActivity) }
+        }
+        content.addView(gpsView, lp(-1, 33))
+    }
+
+    private fun buildMusic(parent: FrameLayout) {
+        val wrap = column().apply {
+            gravity = Gravity.TOP
+            setPadding(dp(18), dp(15), dp(18), dp(15))
+        }
+        parent.addView(wrap, flp())
+        val heading = row()
+        heading.addView(text("POWERAMP", 14f, white, true),
+            LinearLayout.LayoutParams(0, dp(35), 1f))
+        val launch = text("OPEN  ↗", 13f, muted).apply { setOnClickListener { openPoweramp() } }
+        heading.addView(launch, lp(90, 35))
+        wrap.addView(heading, lp(-1, 42))
+
+        val body = row().apply { gravity = Gravity.CENTER_VERTICAL }
+        wrap.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
+        mediaArt = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(Color.rgb(30, 30, 30))
+            setOnClickListener { openPoweramp() }
+        }
+        body.addView(mediaArt, lp(164, 164))
+        val details = column().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(18), 0, dp(3), 0)
+        }
+        body.addView(details, LinearLayout.LayoutParams(0, -1, 1f))
+        mediaTitle = text("Poweramp not playing", 25f, white, true).apply {
+            gravity = Gravity.CENTER_VERTICAL or Gravity.LEFT
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        details.addView(mediaTitle, lp(-1, 68))
+        mediaArtist = text("Tap to start music", 17f, muted).apply {
+            gravity = Gravity.CENTER_VERTICAL or Gravity.LEFT
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        details.addView(mediaArtist, lp(-1, 35))
+        mediaProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progressTintList = android.content.res.ColorStateList.valueOf(accent)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.DKGRAY)
+        }
+        details.addView(mediaProgress, LinearLayout.LayoutParams(-1, dp(5)).apply {
+            topMargin = dp(14)
+        })
+        val controls = row().apply { gravity = Gravity.CENTER }
+        wrap.addView(controls, lp(-1, 68))
+        val previous = musicButton("◀◀") { command(PowerampBridge.PREVIOUS) }
+        mediaPlay = musicButton("▶") { toggleMusic() }
+        val next = musicButton("▶▶") { command(PowerampBridge.NEXT) }
+        controls.addView(previous, LinearLayout.LayoutParams(0, -1, 1f))
+        controls.addView(mediaPlay, LinearLayout.LayoutParams(0, -1, 1f))
+        controls.addView(next, LinearLayout.LayoutParams(0, -1, 1f))
+    }
+
+    private fun musicButton(label: String, click: () -> Unit): TextView =
+        text(label, 27f, white, true).apply { setOnClickListener { click() } }
+
+    private fun openWaze() {
+        val intent = packageManager.getLaunchIntentForPackage("com.waze")
+        if (intent != null) startActivity(intent)
+        else startActivity(Intent(Settings.ACTION_APPLICATION_SETTINGS))
+    }
+
+    private fun openPoweramp() {
+        packageManager.getLaunchIntentForPackage(PowerampBridge.PACKAGE)?.let { startActivity(it) }
+    }
+
+    private fun command(code: Int) = Unit.also { PowerampBridge.command(this, code) }
+
+    private fun toggleMusic() {
+        val state = mediaController?.playbackState?.state
+        command(if (state == PlaybackState.STATE_PLAYING) PowerampBridge.PAUSE else PowerampBridge.PLAY)
+    }
+
+    private fun renderTime() {
+        clockView?.text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        dateView?.text = SimpleDateFormat("EEE, d MMM", Locale.getDefault()).format(Date())
+    }
+
+    private fun renderLocation() {
+        val active = manager?.isLocationEnabled == true
+        val valid = lastLocationAt > 0L && SystemClock.elapsedRealtime() - lastLocationAt < 5000L
+        speedView?.text = if (active && valid) lastSpeedKmh.roundToInt().toString() else "--"
+        gpsView?.text = when {
+            !active -> "GPS OFF"
+            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ->
+                "GPS PERMISSION"
+            valid -> "GPS ACTIVE"
+            else -> "WAITING FOR GPS"
+        }
+    }
+
+    private fun startGps() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+            return
+        try {
+            manager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locationListener)
+        } catch (_: Exception) { }
+    }
+
+    private fun stopGps() {
+        try { manager?.removeUpdates(locationListener) } catch (_: Exception) { }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 109) startGps()
+    }
+
+    private fun selectSession(sessions: List<MediaController>?) {
+        mediaController?.unregisterCallback(mediaCallback)
+        mediaController = sessions?.firstOrNull {
+            it.packageName == PowerampBridge.PACKAGE &&
+                it.playbackState?.state == PlaybackState.STATE_PLAYING
+        } ?: sessions?.firstOrNull { it.packageName == PowerampBridge.PACKAGE }
+        mediaController?.registerCallback(mediaCallback)
+        renderMedia()
+    }
+
+    private fun startMedia() {
+        val listeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+        if (listeners?.contains(packageName) != true) {
+            mediaTitle?.text = "Poweramp"
+            mediaArtist?.text = "Enable notification access for track info"
+            return
+        }
+        val component = ComponentName(this, DashNotificationListener::class.java)
+        sessionManager = getSystemService(MediaSessionManager::class.java)
+        try {
+            sessionManager?.addOnActiveSessionsChangedListener(sessionsChanged, component)
+            sessionRegistered = true
+            selectSession(sessionManager?.getActiveSessions(component))
+        } catch (_: SecurityException) { }
+    }
+
+    private fun stopMedia() {
+        mediaController?.unregisterCallback(mediaCallback)
+        mediaController = null
+        if (sessionRegistered) {
+            try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsChanged) }
+            catch (_: Exception) { }
+            sessionRegistered = false
+        }
+    }
+
+    private fun renderMedia() {
+        val controller = mediaController
+        val metadata = controller?.metadata
+        mediaTitle?.text = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
+            ?.takeIf { it.isNotBlank() } ?: "Poweramp"
+        mediaArtist?.text = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            ?.takeIf { it.isNotBlank() } ?: "Tap OPEN to play music"
+        val cover = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+            ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+        mediaArt?.setImageBitmap(cover)
+        mediaPlay?.text = if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) "Ⅱ" else "▶"
+        renderMediaProgress()
+    }
+
+    private fun renderMediaProgress() {
+        val metadata = mediaController?.metadata ?: run {
+            mediaProgress?.progress = 0
+            return
+        }
+        val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
+        if (duration <= 0L) { mediaProgress?.progress = 0; return }
+        val playback = mediaController?.playbackState ?: return
+        val delta = if (playback.state == PlaybackState.STATE_PLAYING)
+            SystemClock.elapsedRealtime() - playback.lastPositionUpdateTime else 0L
+        val position = (playback.position + delta * playback.playbackSpeed).toLong()
+        mediaProgress?.progress = ((position.coerceIn(0L, duration) * 1000L) / duration).toInt()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        registerReceiver(timeReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_TICK)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        })
+        startGps()
+        startMedia()
+        handler.post(tick)
+    }
+
+    override fun onStop() {
+        handler.removeCallbacks(tick)
+        stopGps()
+        stopMedia()
+        unregisterReceiver(timeReceiver)
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        renderTime()
+        renderLocation()
+    }
+
+    @Deprecated("Use gesture navigation")
+    override fun onBackPressed() {
+        // HOME is the bottom of the task stack.
+    }
+
+    /**
+     * One static lightweight decorative backdrop. It's NOT a navigation map.
+     * A tap always launches the real Waze app.
+     */
+    private class RoadGridView(context: Context) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            canvas.drawColor(Color.rgb(17, 20, 23))
+            paint.strokeWidth = 1f * resources.displayMetrics.density
+            paint.color = Color.rgb(38, 43, 49)
+            for (i in 0..12) {
+                val x = i * w / 12
+                canvas.drawLine(x, 0f, x, h, paint)
+            }
+            for (i in 0..9) {
+                val y = i * h / 9
+                canvas.drawLine(0f, y, w, y, paint)
+            }
+            paint.strokeWidth = 9f * resources.displayMetrics.density
+            paint.color = Color.rgb(46, 49, 52)
+            val road = Path().apply {
+                moveTo(-w * .1f, h * .7f)
+                cubicTo(w * .22f, h * .38f, w * .42f, h * .84f, w * 1.1f, h * .19f)
+            }
+            canvas.drawPath(road, paint)
+            paint.strokeWidth = 2f * resources.displayMetrics.density
+            paint.color = Color.rgb(87, 92, 97)
+            canvas.drawPath(road, paint)
+            paint.color = Color.rgb(177, 46, 46)
+            canvas.drawCircle(w * .5f, h * .5f, 6f * resources.displayMetrics.density, paint)
+        }
+    }
+}
