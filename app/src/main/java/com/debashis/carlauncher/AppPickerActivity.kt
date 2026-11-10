@@ -39,7 +39,7 @@ class AppPickerActivity : Activity() {
         hideSystemBars()
 
         val slot = intent.getIntExtra(EXTRA_SLOT, 0)
-        findViewById<TextView>(R.id.count).text = "Slot ${slot + 1}"
+        findViewById<TextView>(R.id.count).text = if (slot < 0) "Choose app" else "Slot ${slot + 1}"
         findViewById<View>(R.id.back).setOnClickListener { finish() }
 
         loadApps()
