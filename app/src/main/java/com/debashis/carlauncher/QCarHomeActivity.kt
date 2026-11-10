@@ -304,9 +304,18 @@ class QCarHomeActivity : Activity() {
             background = rounded(if (label == "HOME") Color.rgb(45, 18, 18) else Color.TRANSPARENT)
             setOnClickListener { onClick() }
         }
-        val sym = text(symbol, 26f, if (label == "HOME") accent else white)
-        item.addView(sym, lp(58, 43))
-        item.addView(text(label, 10f, muted, true), lp(58, 18))
+        val showLabels = Prefs.dockLabelsVisible(this)
+        item.contentDescription = when (label) {
+            "SET" -> "Settings"
+            "NAVI" -> "Navigation"
+            else -> label
+        }
+        val sym = text(symbol, if (showLabels) 26f else 30f,
+            if (label == "HOME") accent else white).apply {
+            gravity = Gravity.CENTER
+        }
+        item.addView(sym, lp(58, if (showLabels) 43 else 61))
+        if (showLabels) item.addView(text(label, 10f, muted, true), lp(58, 18))
         parent.addView(item, LinearLayout.LayoutParams(-1, 0, 1f).apply {
             setMargins(0, dp(5), 0, dp(5))
         })
