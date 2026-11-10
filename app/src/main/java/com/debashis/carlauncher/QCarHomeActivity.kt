@@ -432,7 +432,7 @@ class QCarHomeActivity : Activity() {
         loadOfflineMaps()
 
         val recenter = mapControl("⊙") { centerMapOnMyLocation() }
-        parent.addView(recenter, flp(39, 39, Gravity.TOP or Gravity.RIGHT).apply {
+        parent.addView(recenter, flp(49, 49, Gravity.TOP or Gravity.RIGHT).apply {
             rightMargin = dp(12)
             topMargin = dp(12)
         })
@@ -440,11 +440,11 @@ class QCarHomeActivity : Activity() {
         val zoom = column()
         zoom.addView(mapControl("+") {
             mapView?.let { map -> map.setZoomLevel((map.model.mapViewPosition.zoomLevel.toInt() + 1).coerceAtMost(20).toByte()) }
-        }, lp(39, 39))
+        }, lp(49, 49))
         zoom.addView(mapControl("−") {
             mapView?.let { map -> map.setZoomLevel((map.model.mapViewPosition.zoomLevel.toInt() - 1).coerceAtLeast(2).toByte()) }
-        }, lp(39, 39))
-        parent.addView(zoom, flp(41, 84, Gravity.RIGHT or Gravity.BOTTOM).apply {
+        }, lp(49, 49))
+        parent.addView(zoom, flp(51, 105, Gravity.RIGHT or Gravity.BOTTOM).apply {
             rightMargin = dp(12)
             bottomMargin = dp(12)
         })
@@ -484,23 +484,23 @@ class QCarHomeActivity : Activity() {
             menuItems.visibility =
                 if (menuItems.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
-        menuButton.textSize = 25f
+        menuButton.textSize = 31f
         menuButton.contentDescription = "Open map options"
-        mapMenu.addView(menuButton, lp(48, 42))
+        mapMenu.addView(menuButton, lp(60, 53))
         fun addMenuChoice(name: String, description: String, action: () -> Unit) {
             val button = mapControl(name) {
                 menuItems.visibility = View.GONE
                 action()
             }
-            button.textSize = 13f
+            button.textSize = 16.25f
             button.contentDescription = description
-            menuItems.addView(button, LinearLayout.LayoutParams(dp(90), dp(43)).apply {
+            menuItems.addView(button, LinearLayout.LayoutParams(dp(113), dp(54)).apply {
                 topMargin = dp(3)
             })
         }
         addMenuChoice("MAP", "Import offline country map") { chooseOfflineMap() }
         addMenuChoice("GPX", "Import GPX route or track") { chooseDataImport(311) }
-        addMenuChoice("SAVED", "Browse saved routes and points") { showSavedNavigationLibrary() }
+        addMenuChoice("SAVED", "Open Saved routes and POIs") { showSavedNavigationLibrary() }
         addMenuChoice("POI", "Import GPX, CSV or VCF points") { chooseDataImport(312) }
         addMenuChoice("AUTO", "Toggle speed-based zoom") {
             val next = !Prefs.prefs(this).getBoolean("qcar_speed_zoom", false)
@@ -519,12 +519,13 @@ class QCarHomeActivity : Activity() {
     }
 
     private fun mapControl(label: String, click: () -> Unit): TextView =
-        text(label, 23f, white, true).apply {
+        text(label, 28.75f, white, true).apply {
             background = rounded(Color.argb(235, 21, 21, 21), 5)
             setOnClickListener { click() }
             contentDescription = when (label) {
                 "MAP" -> "Import additional offline OpenStreetMap maps"
                 "GPX" -> "Import GPX track or route"
+                "SAVED" -> "Open Saved routes library"
                 "POI" -> "Import GPX waypoints, CSV camera locations or vCard GEO destinations"
                 "AUTO" -> "Toggle automatic speed-based zoom"
                 "⊙" -> "Recenter map on my location"
