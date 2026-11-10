@@ -336,6 +336,20 @@ class SettingsActivity : Activity() {
     }
 
     private fun renderDisplay() {
+        val gpsGroup = newGroup()
+        val gpsRow = newRow(gpsGroup)
+        gpsRow.findViewById<TextView>(R.id.row_title).text = "Show GPS Status"
+        gpsRow.findViewById<TextView>(R.id.row_sub).text =
+            "Tap to toggle location; opens Android settings without privileged permission"
+        gpsRow.findViewById<ImageView>(R.id.row_icon).setImageResource(R.drawable.ic_qcar_gps)
+        gpsRow.findViewById<TextView>(R.id.row_value).text =
+            if (GpsControl.enabled(this)) "On" else "Off"
+        gpsRow.setOnClickListener { GpsControl.toggleOrOpenSettings(this) }
+        gpsGroup.addView(gpsRow)
+        content.addView(header("GPS"))
+        content.addView(gpsGroup)
+        content.addView(spacer())
+
         val clockGroup = newGroup()
         val systemIs24 = DateFormat.is24HourFormat(this)
         val current = Prefs.clockFormat(this)
