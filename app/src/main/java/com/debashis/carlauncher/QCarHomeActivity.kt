@@ -293,8 +293,6 @@ class QCarHomeActivity : Activity() {
         })
 
         val zoom = column()
-        zoom.addView(mapControl("+") { googleMap?.animateCamera(null) }, lp(1, 1))
-        zoom.removeAllViews()
         zoom.addView(mapControl("+") {
             googleMap?.moveCamera(CameraUpdateFactory.zoomIn())
         }, lp(39, 39))
