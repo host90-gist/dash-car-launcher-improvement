@@ -66,4 +66,5 @@ android {
 // Offline OpenStreetMap vector rendering with no Google Play services or keys.
 dependencies {
     implementation("org.mapsforge:mapsforge-map-android:0.25.0")
+    implementation("org.mapsforge:mapsforge-themes:0.25.0")
 }
