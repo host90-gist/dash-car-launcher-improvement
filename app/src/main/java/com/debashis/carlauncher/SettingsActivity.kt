@@ -636,6 +636,39 @@ class SettingsActivity : Activity() {
         }
     }
 
+    /**
+     * Keep optional app selection inside Settings. Some Yecon firmware redirects
+     * transitions to separately launched activities into AV-in/Front View.
+     * A local dialog cannot be intercepted that way and never starts an app.
+     */
+    private fun choosePreferredApp(key: String, title: String) {
+        val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = packageManager.queryIntentActivities(query, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) {
+                it.loadLabel(packageManager).toString()
+            })
+        if (apps.isEmpty()) {
+            Toast.makeText(this, "No launchable applications found", Toast.LENGTH_LONG).show()
+            return
+        }
+        val labels = ArrayList<String>()
+        labels.add("Default / none")
+        labels.addAll(apps.map { it.loadLabel(packageManager).toString() })
+        AlertDialog.Builder(this)
+            .setTitle("Choose " + title)
+            .setItems(labels.toTypedArray()) { _, index ->
+                val selected = if (index == 0) "" else {
+                    val info = apps[index - 1].activityInfo
+                    info.packageName + "/" + info.name
+                }
+                Prefs.prefs(this).edit().putString(key, selected).apply()
+                render()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun renderVolume() {
         val audio = getSystemService(AUDIO_SERVICE) as AudioManager
         val androidGroup = newGroup()
@@ -687,12 +720,7 @@ class SettingsActivity : Activity() {
             "Choose which app the QCarDash OPEN shortcut launches"
         musicApp.findViewById<TextView>(R.id.row_value).text =
             Prefs.prefs(this).getString("qcar_music_app", null)?.substringBefore('/') ?: "Poweramp"
-        musicApp.setOnClickListener {
-            startActivityForResult(
-                Intent(this, AppPickerActivity::class.java)
-                    .putExtra(AppPickerActivity.EXTRA_SLOT, -1), REQ_PICK_MUSIC
-            )
-        }
+        musicApp.setOnClickListener { choosePreferredApp("qcar_music_app", "Music app") }
         appGroup.addView(musicApp)
         val stockApp = newRow(appGroup)
         stockApp.findViewById<TextView>(R.id.row_title).text = "Stock music app"
@@ -714,12 +742,7 @@ class SettingsActivity : Activity() {
         app.findViewById<TextView>(R.id.row_value).text =
             Prefs.prefs(this).getString("qcar_navigation_app", null)
                 ?.substringBefore('/') ?: "Not selected"
-        app.setOnClickListener {
-            startActivityForResult(
-                Intent(this, AppPickerActivity::class.java)
-                    .putExtra(AppPickerActivity.EXTRA_SLOT, -1), REQ_PICK_NAVIGATION
-            )
-        }
+        app.setOnClickListener { choosePreferredApp("qcar_navigation_app", "Map app") }
         group.addView(app)
         val launch = newRow(group)
         launch.findViewById<TextView>(R.id.row_title).text = "Open chosen map app"
