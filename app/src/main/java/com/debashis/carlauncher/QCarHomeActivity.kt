@@ -738,7 +738,7 @@ class QCarHomeActivity : Activity() {
         val heading = row()
         heading.addView(text("POWERAMP", 14f, white, true),
             LinearLayout.LayoutParams(0, dp(35), 1f))
-        val launch = text("OPEN  ↗", 13f, muted).apply { setOnClickListener { openPoweramp() } }
+        val launch = text("OPEN  ↗", 13f, muted).apply { setOnClickListener { openPreferredMusic() } }
         heading.addView(launch, lp(90, 35))
         wrap.addView(heading, lp(-1, 42))
 
@@ -792,6 +792,24 @@ class QCarHomeActivity : Activity() {
         startActivity(intent)
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
+    }
+
+    /** Optional chosen app only changes the OPEN shortcut, not Poweramp controls. */
+    private fun openPreferredMusic() {
+        val choice = Prefs.prefs(this).getString("qcar_music_app", null)
+        if (choice.isNullOrEmpty()) { openPoweramp(); return }
+        try {
+            val parts = choice.split('/', limit = 2)
+            val target = if (parts.size == 2)
+                Intent(Intent.ACTION_MAIN).setClassName(parts[0], parts[1])
+            else packageManager.getLaunchIntentForPackage(parts[0])
+            if (target == null) throw android.content.ActivityNotFoundException()
+            launchNoAnimation(target)
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(
+                this, "Chosen music app unavailable", android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     private fun openPoweramp() {
