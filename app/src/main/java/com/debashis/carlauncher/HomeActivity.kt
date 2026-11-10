@@ -163,6 +163,7 @@ class HomeActivity : Activity() {
         speedView = findViewById(R.id.speed)
         btView = findViewById(R.id.bt_status)
         gpsView = findViewById(R.id.gps_status)
+        gpsView.setOnClickListener { GpsControl.toggleOrOpenSettings(this) }
         npTitle = findViewById(R.id.np_title)
         npSub = findViewById(R.id.np_sub)
         npArt = findViewById(R.id.np_art)
@@ -191,19 +192,11 @@ class HomeActivity : Activity() {
         findViewById<View>(R.id.screen_off).setOnClickListener { setScreenOff(false) }
         clockView.setOnLongClickListener { setScreenOff(true); true }
 
-        npPlay.setOnClickListener {
-            val c = controller ?: return@setOnClickListener
-            if (c.playbackState?.state == PlaybackState.STATE_PLAYING) {
-                c.transportControls.pause()
-            } else {
-                c.transportControls.play()
-            }
-        }
-        npNext.setOnClickListener { controller?.transportControls?.skipToNext() }
+        npPlay.setOnClickListener { togglePlayPause() }
+        npNext.setOnClickListener { skipNext() }
 
         findViewById<View>(R.id.now_playing).setOnClickListener {
-            val pkg = controller?.packageName ?: "com.imotor.music"
-            packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
+            openPlayingApp()
         }
 
         loadWallpaper()
@@ -527,7 +520,7 @@ class HomeActivity : Activity() {
             root.findViewById(R.id.drive_np_next)
         )
         driveCard?.play?.setOnClickListener { togglePlayPause() }
-        driveCard?.next?.setOnClickListener { controller?.transportControls?.skipToNext() }
+        driveCard?.next?.setOnClickListener { skipNext() }
         driveCard?.root?.setOnClickListener { openPlayingApp() }
         driveClock?.setOnLongClickListener { setScreenOff(true); true }
     }
@@ -673,13 +666,27 @@ class HomeActivity : Activity() {
     }
 
     private fun togglePlayPause() {
-        val c = controller ?: return
-        if (c.playbackState?.state == PlaybackState.STATE_PLAYING) c.transportControls.pause()
-        else c.transportControls.play()
+        val c = controller
+        if (c == null || c.packageName == PowerampBridge.PACKAGE) {
+            PowerampBridge.command(this, if (c?.playbackState?.state == PlaybackState.STATE_PLAYING)
+                PowerampBridge.PAUSE else PowerampBridge.PLAY)
+        } else {
+            if (c.playbackState?.state == PlaybackState.STATE_PLAYING) c.transportControls.pause()
+            else c.transportControls.play()
+        }
+    }
+
+    private fun skipNext() {
+        val c = controller
+        if (c == null || c.packageName == PowerampBridge.PACKAGE) {
+            PowerampBridge.command(this, PowerampBridge.NEXT)
+        } else {
+            c.transportControls.skipToNext()
+        }
     }
 
     private fun openPlayingApp() {
-        val pkg = controller?.packageName ?: "com.imotor.music"
+        val pkg = controller?.packageName ?: PowerampBridge.PACKAGE
         packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
     }
 
@@ -737,7 +744,10 @@ class HomeActivity : Activity() {
     /** Prefer whatever is actually playing over whatever merely exists. */
     private fun bindController(list: List<MediaController>?) {
         controller?.unregisterCallback(controllerCallback)
-        controller = list?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+        controller = list?.firstOrNull { it.packageName == PowerampBridge.PACKAGE &&
+                    it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: list?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: list?.firstOrNull { it.packageName == PowerampBridge.PACKAGE }
             ?: list?.firstOrNull()
         controller?.registerCallback(controllerCallback)
         renderMedia()
@@ -837,7 +847,8 @@ class HomeActivity : Activity() {
 
     private fun updateGpsLabel() {
         gpsView.text = when {
-            !hasLocationPermission() -> "Location off"
+            !GpsControl.enabled(this) -> "GPS off"
+            !hasLocationPermission() -> "GPS permission needed"
             lastFixAt == 0L -> "Waiting for GPS"
             satellites > 0 -> "$satellites satellites"
             else -> "GPS"
@@ -863,7 +874,7 @@ class HomeActivity : Activity() {
         val lm = locationManager ?: return
         try {
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locationListener)
-            lm.registerGnssStatusCallback(mainExecutor, gnssCallback)
+            lm.registerGnssStatusCallback(gnssCallback, handler)
         } catch (e: SecurityException) {
             // Permission revoked between the check and the call. Leave the dash showing.
         } catch (e: IllegalArgumentException) {
@@ -928,6 +939,7 @@ class HomeActivity : Activity() {
         applyDim()
         updateClock()
         updateBluetooth()
+        updateGpsLabel()
     }
 
     /** Home is the bottom of the stack. Back must not leave the user on a blank screen. */
