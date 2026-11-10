@@ -492,7 +492,6 @@ class SettingsActivity : Activity() {
             render()
         }
         uiGroup.addView(dockRow)
-        content.addView(header("UI settings"))
         content.addView(uiGroup)
         content.addView(spacer())
 
