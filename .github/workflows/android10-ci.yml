@@ -21,8 +21,10 @@ jobs:
       # setup-android@v3 attempts to install the removed legacy "tools" package.
       - name: Install compile SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          SDKMANAGER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
       - name: Assemble debug APK
         run: |
           chmod +x gradlew
