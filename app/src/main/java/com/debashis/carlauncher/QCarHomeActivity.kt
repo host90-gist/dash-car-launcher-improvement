@@ -300,10 +300,10 @@ class QCarHomeActivity : Activity() {
 
         val zoom = column()
         zoom.addView(mapControl("+") {
-            mapView?.let { map -> map.setZoomLevel((map.zoomLevel.toInt() + 1).coerceAtMost(20).toByte()) }
+            mapView?.let { map -> map.setZoomLevel((map.model.mapViewPosition.zoomLevel.toInt() + 1).coerceAtMost(20).toByte()) }
         }, lp(39, 39))
         zoom.addView(mapControl("−") {
-            mapView?.let { map -> map.setZoomLevel((map.zoomLevel.toInt() - 1).coerceAtLeast(2).toByte()) }
+            mapView?.let { map -> map.setZoomLevel((map.model.mapViewPosition.zoomLevel.toInt() - 1).coerceAtLeast(2).toByte()) }
         }, lp(39, 39))
         parent.addView(zoom, flp(41, 84, Gravity.RIGHT or Gravity.BOTTOM).apply {
             rightMargin = dp(12)
