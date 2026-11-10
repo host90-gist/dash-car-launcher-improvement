@@ -40,6 +40,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -47,6 +50,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import java.text.SimpleDateFormat
+import java.io.FileOutputStream
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -76,6 +80,9 @@ class QCarHomeActivity : Activity() {
     private var mediaArt: ImageView? = null
     private var mediaPlay: TextView? = null
     private var mediaProgress: ProgressBar? = null
+    private var lastAlbumArt: Bitmap? = null
+    private var savedAlbumArtLoaded = false
+    private var lastSavedArtwork: Bitmap? = null
     private var mapView: MapView? = null
     private var mapCache: TileCache? = null
     private var mapData: MultiMapDataStore? = null
@@ -155,13 +162,7 @@ class QCarHomeActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        applyImmersiveMode()
         window.setWindowAnimations(0)
         window.statusBarColor = bg
         window.navigationBarColor = bg
@@ -177,6 +178,37 @@ class QCarHomeActivity : Activity() {
         }
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 109)
+    }
+
+    /**
+     * Request normal Android immersive mode. An edge swipe temporarily reveals
+     * Android system bars; launcher focus/resume restores the fullscreen state.
+     * Some head-unit vendors draw a separate, privileged bar above applications;
+     * standard Android APIs cannot forcibly dismiss that system overlay.
+     */
+    private fun applyImmersiveMode() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.decorView.windowInsetsController?.apply {
+                systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyImmersiveMode()
     }
 
     private fun dp(v: Int): Int = (resources.displayMetrics.density * v).roundToInt()
@@ -868,10 +900,51 @@ class QCarHomeActivity : Activity() {
             else "Open Poweramp to start playback"
         val cover = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
-        mediaArt?.setImageBitmap(cover)
+        if (cover != null) {
+            // Poweramp may destroy its session on pause/stop. Do not discard
+            // the last real cover just because the current metadata is null.
+            lastAlbumArt = cover
+            if (lastSavedArtwork !== cover) {
+                lastSavedArtwork = cover
+                cacheAlbumArt(cover)
+            }
+        } else if (!savedAlbumArtLoaded) {
+            savedAlbumArtLoaded = true
+            loadCachedAlbumArt()
+        }
+        mediaArt?.setImageBitmap(lastAlbumArt)
         mediaPlay?.text = if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING ||
             (controller == null && powerampPaused == false)) "Ⅱ" else "▶"
         renderMediaProgress()
+    }
+
+    /** Persist only the most recent album cover across launcher restarts. */
+    private fun cacheAlbumArt(bitmap: Bitmap) {
+        val file = File(filesDir, "poweramp-last-art.jpg")
+        Thread {
+            try {
+                val temp = File(filesDir, "poweramp-last-art.tmp")
+                FileOutputStream(temp).use { output ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 85, output)) {
+                        throw java.io.IOException("Artwork encoding failed")
+                    }
+                }
+                if (file.exists()) file.delete()
+                if (!temp.renameTo(file)) temp.delete()
+            } catch (e: Exception) {
+                Log.w("QCarPoweramp", "Could not cache album cover", e)
+            }
+        }.start()
+    }
+
+    private fun loadCachedAlbumArt() {
+        val file = File(filesDir, "poweramp-last-art.jpg")
+        if (!file.exists()) return
+        try {
+            lastAlbumArt = BitmapFactory.decodeFile(file.absolutePath)
+        } catch (e: Exception) {
+            Log.w("QCarPoweramp", "Could not restore last album cover", e)
+        }
     }
 
     private fun renderMediaProgress() {
@@ -910,6 +983,8 @@ class QCarHomeActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        applyImmersiveMode()
+        renderMedia()
         renderTime()
         renderLocation()
     }
