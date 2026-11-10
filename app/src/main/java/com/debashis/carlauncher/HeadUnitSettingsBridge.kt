@@ -47,23 +47,21 @@ object HeadUnitSettingsBridge {
         }
     }
 
+    /**
+     * Stock Yecon launcher Function.onSettings() opens this EXACT activity.
+     * getLaunchIntentForPackage() on this firmware resolves to AV-in/Front
+     * View, so NEVER use the package's generic launcher entry point here.
+     */
     fun openStockSettings(context: Context): Boolean {
-        val pm = context.packageManager
-        val pkg = STOCK_SETTINGS_PACKAGE
         return try {
-            val target = pm.getLaunchIntentForPackage(pkg)
-                ?: Intent(Intent.ACTION_MAIN)
-                    .addCategory(Intent.CATEGORY_LAUNCHER)
-                    .setPackage(pkg)
-                    .let { query ->
-                        pm.queryIntentActivities(query, 0).firstOrNull()?.activityInfo
-                            ?.let { Intent(Intent.ACTION_MAIN).setClassName(it.packageName, it.name) }
-                    }
-                ?: return false
-            context.startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                setClassName(STOCK_SETTINGS_PACKAGE, "com.carocean.settings.CustomSettingActivity")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
             true
         } catch (e: Exception) {
-            Log.w(TAG, "Could not open stock settings", e)
+            Log.w(TAG, "Stock CustomSettingActivity not accessible", e)
             false
         }
     }
