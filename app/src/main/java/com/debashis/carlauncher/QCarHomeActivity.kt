@@ -674,9 +674,13 @@ class QCarHomeActivity : Activity() {
         poiData.clear()
         loadedPoiSources.clear()
         val routeFiles = savedRouteFiles()
+        val byName = routeFiles.associateBy { it.name }
+        val ordered = SavedNavigationOrder.ordered(
+            this, true, routeFiles.map { it.name }
+        )
         val selected = Prefs.prefs(this).getString("qcar_active_route", null)
         val activeFile = routeFiles.firstOrNull { it.name == selected }
-            ?: routeFiles.firstOrNull()
+            ?: ordered.firstOrNull()?.let { byName[it] }
         if (activeFile != null) {
             try {
                 routeSegments.addAll(activeFile.inputStream().use {
@@ -686,19 +690,28 @@ class QCarHomeActivity : Activity() {
                 Log.w("QCarOfflineNav", "Could not load route " + activeFile.name, e)
             }
         }
-        // Keep a bounded number of imported datasets to avoid exhausting the
-        // head unit memory. All saved files remain listed in the library.
+        // Respect POI removals and ordering without modifying the source files.
+        val savedPoints = ArrayList<Pair<String, OfflineNavigationData.Poi>>()
         for (file in savedPoiFiles().take(40)) {
             try {
-                val points = readPoiFile(file)
-                val space = (12000 - poiData.size).coerceAtLeast(0)
-                poiData.addAll(points.take(space))
+                readPoiFile(file).forEachIndexed { index, poi ->
+                    val key = SavedNavigationOrder.pointKey(file.name, index)
+                    if (savedPoints.size < 12000 &&
+                        !SavedNavigationOrder.isPoiHidden(this, key)) {
+                        savedPoints.add(key to poi)
+                    }
+                }
                 loadedPoiSources.add(file.name)
-                if (poiData.size >= 12000) break
+                if (savedPoints.size >= 12000) break
             } catch (e: Exception) {
                 Log.w("QCarOfflineNav", "Could not load POIs " + file.name, e)
             }
         }
+        val orderedPoints = SavedNavigationOrder.ordered(
+            this, false, savedPoints.map { it.first }
+        )
+        val pointIndex = savedPoints.associate { it.first to it.second }
+        poiData.addAll(orderedPoints.mapNotNull { pointIndex[it] })
         drawNavigationOverlays()
     }
 
