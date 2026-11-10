@@ -201,12 +201,13 @@ class SavedRoutesActivity : Activity() {
                 }
         } else {
             val points = ArrayList<Entry>()
+            val hiddenPoiKeys = SavedNavigationOrder.hiddenPoiKeys(this)
             for (file in poiFiles().take(40)) {
                 try {
                     readPoiFile(file).forEachIndexed { index, poi ->
                         val key = SavedNavigationOrder.pointKey(file.name, index)
                         if (points.size < 12000 &&
-                            !SavedNavigationOrder.isPoiHidden(this, key)) {
+                            key !in hiddenPoiKeys) {
                             points.add(Entry(key, poi.title, file, poi))
                         }
                     }
