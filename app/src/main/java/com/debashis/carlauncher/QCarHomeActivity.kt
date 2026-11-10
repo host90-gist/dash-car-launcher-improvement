@@ -41,6 +41,8 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
+import android.view.MotionEvent
+import org.mapsforge.map.layer.overlay.Polyline
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
@@ -95,6 +97,16 @@ class QCarHomeActivity : Activity() {
     private var lastGpsLocation: Location? = null
     private var lastCameraLocation: Location? = null
     private var followPosition = true
+    private val routeSegments = ArrayList<List<LatLong>>()
+    private val poiData = ArrayList<OfflineNavigationData.Poi>()
+    private val overlayLayers = ArrayList<org.mapsforge.map.layer.Layer>()
+    private var lastPoiAlertAt = 0L
+    private var lastPoiAlertKey = ""
+    private var autoZoomLastAt = 0L
+    private var splitLastRatio = 0.35f
+    private var mapPane: FrameLayout? = null
+    private var tilesPane: LinearLayout? = null
+    private var dataImportPending = false
     private var mapFilePending = false
     private var importedMapsStatus: String? = null
     private var lastLocationAt = 0L
@@ -134,6 +146,8 @@ class QCarHomeActivity : Activity() {
         lastSpeedKmh = if (location.speed < 0.833f) 0f else location.speed * 3.6f
         lastGpsLocation = location
         updateMapLocation(location)
+        updateSpeedZoom(location)
+        alertNearbyCameras(location)
         renderLocation()
     }
 
@@ -280,12 +294,48 @@ class QCarHomeActivity : Activity() {
 
         val dashboard = row().apply { gravity = Gravity.TOP }
         main.addView(dashboard, LinearLayout.LayoutParams(-1, 0, 1f))
+        val ratio = Prefs.prefs(this).getFloat("qcar_map_split_ratio", 0.35f)
+            .coerceIn(0.20f, 0.75f)
+        splitLastRatio = ratio
         val navigation = card()
-        dashboard.addView(navigation, inset(navigation, 0, -1, 7f))
-        buildNavigation(navigation)
-
+        mapPane = navigation
+        dashboard.addView(navigation, inset(navigation, 0, -1, ratio))
+        // Drag the handle to resize map and tiles, without obscuring the dock.
+        val divider = View(this).apply {
+            background = rounded(Color.rgb(85, 85, 85), 3)
+            contentDescription = "Drag to resize map and tiles"
+            setOnTouchListener(object : View.OnTouchListener {
+                private var startX = 0f
+                private var startRatio = ratio
+                override fun onTouch(view: View, event: MotionEvent): Boolean {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            startX = event.rawX
+                            startRatio = splitLastRatio
+                            return true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val available = dashboard.width.toFloat()
+                            if (available > 10f) {
+                                setMapSplitRatio(
+                                    startRatio + (event.rawX - startX) / available, false)
+                            }
+                            return true
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            setMapSplitRatio(splitLastRatio, true)
+                            return true
+                        }
+                    }
+                    return false
+                }
+            })
+        }
+        dashboard.addView(divider, lp(12, -1))
         val right = column().apply { gravity = Gravity.TOP }
-        dashboard.addView(right, LinearLayout.LayoutParams(0, -1, 13f))
+        tilesPane = right
+        dashboard.addView(right, LinearLayout.LayoutParams(0, -1, 1f - ratio))
+        buildNavigation(navigation)
         val upper = row().apply { gravity = Gravity.TOP }
         right.addView(upper, weightedHeight(0.36f))
         addVehicle(upper)
@@ -297,6 +347,21 @@ class QCarHomeActivity : Activity() {
         right.addView(musicCard, inset(musicCard, -1, 0, 0.64f))
         buildMusic(musicCard)
         return outer
+    }
+
+    private fun setMapSplitRatio(value: Float, save: Boolean) {
+        val safe = value.coerceIn(0.20f, 0.75f)
+        splitLastRatio = safe
+        (mapPane?.layoutParams as? LinearLayout.LayoutParams)?.let {
+            it.weight = safe
+            mapPane?.layoutParams = it
+        }
+        (tilesPane?.layoutParams as? LinearLayout.LayoutParams)?.let {
+            it.weight = 1f - safe
+            tilesPane?.layoutParams = it
+        }
+        if (save) Prefs.prefs(this).edit()
+            .putFloat("qcar_map_split_ratio", safe).apply()
     }
 
     private fun rail(parent: LinearLayout, symbol: String, label: String, onClick: () -> Unit) {
@@ -377,6 +442,31 @@ class QCarHomeActivity : Activity() {
         parent.addView(bubble, flp(61, 61, Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM).apply {
             bottomMargin = dp(12)
         })
+
+        fun importButton(name: String, code: Int, top: Int) {
+            val button = mapControl(name) { chooseDataImport(code) }
+            button.textSize = 11f
+            parent.addView(button, flp(48, 39, Gravity.TOP or Gravity.LEFT).apply {
+                leftMargin = dp(12)
+                topMargin = dp(top)
+            })
+        }
+        importButton("GPX", 311, 57)
+        importButton("POI", 312, 102)
+        val speedZoom = mapControl("AUTO") {
+            val next = !Prefs.prefs(this).getBoolean("qcar_speed_zoom", false)
+            Prefs.prefs(this).edit().putBoolean("qcar_speed_zoom", next).apply()
+            android.widget.Toast.makeText(this,
+                "Speed-based zoom " + if (next) "on" else "off",
+                android.widget.Toast.LENGTH_SHORT).show()
+            if (next) lastGpsLocation?.let { updateSpeedZoom(it, true) }
+        }
+        speedZoom.textSize = 10f
+        parent.addView(speedZoom, flp(48, 39, Gravity.TOP or Gravity.LEFT).apply {
+            leftMargin = dp(12)
+            topMargin = dp(147)
+        })
+        restoreNavigationOverlays()
     }
 
     private fun mapControl(label: String, click: () -> Unit): TextView =
@@ -385,6 +475,9 @@ class QCarHomeActivity : Activity() {
             setOnClickListener { click() }
             contentDescription = when (label) {
                 "MAP" -> "Import additional offline OpenStreetMap maps"
+                "GPX" -> "Import GPX track or route"
+                "POI" -> "Import GPX waypoints or CSV camera locations"
+                "AUTO" -> "Toggle automatic speed-based zoom"
                 "⊙" -> "Recenter map on my location"
                 "+" -> "Zoom in"
                 else -> "Zoom out"
@@ -621,6 +714,7 @@ class QCarHomeActivity : Activity() {
                 map.setZoomLevel(combined.startZoomLevel())
             }
             installPositionMarker(map)
+            drawNavigationOverlays()
             mapStatus?.visibility = View.GONE
             lastGpsLocation?.let { updateMapLocation(it, force = true) }
         } catch (e: Exception) {
