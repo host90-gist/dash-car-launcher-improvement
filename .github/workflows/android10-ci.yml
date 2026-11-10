@@ -1,8 +1,7 @@
 name: Android 10 APK build
 
+# Manual builds only while UI changes are being reviewed.
 on:
-  push:
-    branches: [qcar-android10-poweramp-gps]
   workflow_dispatch:
 
 permissions:
