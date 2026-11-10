@@ -500,7 +500,9 @@ class QCarHomeActivity : Activity() {
         }
         addMenuChoice("MAP", "Import offline country map") { chooseOfflineMap() }
         addMenuChoice("GPX", "Import GPX route or track") { chooseDataImport(311) }
-        addMenuChoice("SAVED", "Open Saved routes and POIs") { showSavedNavigationLibrary() }
+        addMenuChoice("SAVED", "Open Saved routes and POIs") {
+            startActivityForResult(Intent(this, SavedRoutesActivity::class.java), 313)
+        }
         addMenuChoice("POI", "Import GPX, CSV or VCF points") { chooseDataImport(312) }
         addMenuChoice("AUTO", "Toggle speed-based zoom") {
             val next = !Prefs.prefs(this).getBoolean("qcar_speed_zoom", false)
@@ -1089,6 +1091,27 @@ class QCarHomeActivity : Activity() {
     @Deprecated("Android 10 file picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 313) {
+            restoreNavigationOverlays()
+            if (resultCode == RESULT_OK && data != null) {
+                val routeName = data.getStringExtra(SavedRoutesActivity.EXTRA_ROUTE_FILE)
+                if (routeName != null) {
+                    savedRouteFiles().firstOrNull { it.name == routeName }
+                        ?.let { selectSavedRoute(it) }
+                } else if (data.hasExtra(SavedRoutesActivity.EXTRA_POI_LAT) &&
+                    data.hasExtra(SavedRoutesActivity.EXTRA_POI_LON)) {
+                    val point = LatLong(
+                        data.getDoubleExtra(SavedRoutesActivity.EXTRA_POI_LAT, 0.0),
+                        data.getDoubleExtra(SavedRoutesActivity.EXTRA_POI_LON, 0.0)
+                    )
+                    showPoiDetails(OfflineNavigationData.Poi(
+                        point, data.getStringExtra(SavedRoutesActivity.EXTRA_POI_TITLE)
+                            ?: "Imported POI"
+                    ))
+                }
+            }
+            return
+        }
         if (requestCode in 311..312) {
             if (resultCode == RESULT_OK && data?.data != null)
                 importNavigationData(data.data!!, requestCode)
