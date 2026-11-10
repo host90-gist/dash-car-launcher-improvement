@@ -613,6 +613,158 @@ class SettingsActivity : Activity() {
         content.addView(tripGroup)
     }
 
+
+    /** Proprietary head-unit values are read-only to normal third-party apps. */
+    private fun factoryControl(group: LinearLayout, title: String, explanation: String, key: String) {
+        val row = newRow(group)
+        row.findViewById<TextView>(R.id.row_title).text = title
+        row.findViewById<TextView>(R.id.row_sub).text = explanation
+        row.findViewById<TextView>(R.id.row_value).text =
+            HeadUnitSettingsBridge.property(key) ?: "Stock settings"
+        row.setOnClickListener { openStockSettings(title) }
+        group.addView(row)
+    }
+
+    private fun openStockSettings(feature: String) {
+        if (!HeadUnitSettingsBridge.openStockSettings(this)) {
+            AlertDialog.Builder(this)
+                .setTitle("Stock settings unavailable")
+                .setMessage("Open the original head-unit Settings app to change " + feature +
+                    ". Its privileged controls are not accessible to QCarDash.")
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
+    private fun renderVolume() {
+        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+        val androidGroup = newGroup()
+        val music = newRow(androidGroup)
+        music.findViewById<TextView>(R.id.row_title).text = "Music"
+        music.findViewById<TextView>(R.id.row_sub).text = "Android media volume"
+        val current = music.findViewById<TextView>(R.id.row_value)
+        current.text = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toString()
+        androidGroup.addView(music)
+        val volume = SeekBar(this).apply {
+            max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            progress = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+            setPadding(dp(18), dp(4), dp(18), dp(12))
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar?, level: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    try {
+                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, level, 0)
+                        current.text = level.toString()
+                    } catch (_: SecurityException) {
+                        Toast.makeText(this@SettingsActivity, "Audio control restricted", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                override fun onStartTrackingTouch(bar: SeekBar?) {}
+                override fun onStopTrackingTouch(bar: SeekBar?) {}
+            })
+        }
+        androidGroup.addView(volume)
+        content.addView(header("Android playback"))
+        content.addView(androidGroup)
+
+        val factory = newGroup()
+        factoryControl(factory, "Music (factory level)",
+            "Tap to change the stock music source level", "persist.sys.volume_media")
+        factoryControl(factory, "Navigation",
+            "Factory navigation volume / audio mixing", "persist.sys.volume_gis")
+        factoryControl(factory, "BT call",
+            "Factory Bluetooth call level", "persist.sys.volume_bt")
+        factoryControl(factory, "Backcar mute",
+            "Mute audio during reverse-camera mode", "persist.sys.backcar_mute_enable")
+        content.addView(spacer())
+        content.addView(header("Factory mixer"))
+        content.addView(factory)
+
+        val appGroup = newGroup()
+        val musicApp = newRow(appGroup)
+        musicApp.findViewById<TextView>(R.id.row_title).text = "Music app"
+        musicApp.findViewById<TextView>(R.id.row_sub).text =
+            "Choose which app the QCarDash OPEN shortcut launches"
+        musicApp.findViewById<TextView>(R.id.row_value).text =
+            Prefs.prefs(this).getString("qcar_music_app", null)?.substringBefore('/') ?: "Poweramp"
+        musicApp.setOnClickListener {
+            startActivityForResult(
+                Intent(this, AppPickerActivity::class.java)
+                    .putExtra(AppPickerActivity.EXTRA_SLOT, -1), REQ_PICK_MUSIC
+            )
+        }
+        appGroup.addView(musicApp)
+        val stockApp = newRow(appGroup)
+        stockApp.findViewById<TextView>(R.id.row_title).text = "Stock music app"
+        stockApp.findViewById<TextView>(R.id.row_sub).text =
+            "Change the music app used by stock launcher and factory buttons"
+        stockApp.setOnClickListener { openStockSettings("stock music app") }
+        appGroup.addView(stockApp)
+        content.addView(spacer())
+        content.addView(header("App selection"))
+        content.addView(appGroup)
+    }
+
+    private fun renderNavigation() {
+        val group = newGroup()
+        val app = newRow(group)
+        app.findViewById<TextView>(R.id.row_title).text = "Choose map app"
+        app.findViewById<TextView>(R.id.row_sub).text =
+            "External navigation app for QCarDash; offline Mapsforge stays embedded"
+        app.findViewById<TextView>(R.id.row_value).text =
+            Prefs.prefs(this).getString("qcar_navigation_app", null)
+                ?.substringBefore('/') ?: "Not selected"
+        app.setOnClickListener {
+            startActivityForResult(
+                Intent(this, AppPickerActivity::class.java)
+                    .putExtra(AppPickerActivity.EXTRA_SLOT, -1), REQ_PICK_NAVIGATION
+            )
+        }
+        group.addView(app)
+        val launch = newRow(group)
+        launch.findViewById<TextView>(R.id.row_title).text = "Open chosen map app"
+        launch.findViewById<TextView>(R.id.row_sub).text =
+            "Launch the selected external navigation application"
+        launch.setOnClickListener {
+            val component = Prefs.prefs(this).getString("qcar_navigation_app", null)
+            if (component.isNullOrBlank()) {
+                Toast.makeText(this, "Choose a map app first", Toast.LENGTH_SHORT).show()
+            } else {
+                try {
+                    val parts = component.split('/', limit = 2)
+                    val launchIntent = if (parts.size == 2) {
+                        Intent(Intent.ACTION_MAIN).setClassName(parts[0], parts[1])
+                    } else packageManager.getLaunchIntentForPackage(parts[0])
+                    if (launchIntent == null) throw ActivityNotFoundException()
+                    startActivity(launchIntent)
+                } catch (_: Exception) {
+                    Toast.makeText(this, "Selected app is unavailable", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        group.addView(launch)
+        factoryControl(group, "Stock navigation app",
+            "Select the app used by factory navigation keys", "persist.sys.navi_package")
+        content.addView(group)
+    }
+
+    private fun renderBackcar() {
+        val group = newGroup()
+        factoryControl(group, "Reverse mode",
+            "Stock camera mode (factory / after-market camera)", "persist.sys.backcar_type")
+        factoryControl(group, "Swerve auto 360",
+            "Stock automatic 360-degree camera switching", "persist.sys.360_auto_show")
+        content.addView(group)
+        content.addView(TextView(this).apply {
+            text = "Reverse camera settings are controlled by head-unit firmware. " +
+                "Tap a setting to open the stock settings app. " +
+                "QCarDash does not transmit unverified MCU commands."
+            setTextColor(getColor(R.color.muted))
+            textSize = 14f
+            setPadding(dp(8), dp(16), dp(8), dp(8))
+        })
+    }
+
     private fun renderAbout() {
         val group = newGroup()
         val version = try {
