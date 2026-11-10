@@ -480,6 +480,22 @@ class SettingsActivity : Activity() {
     }
 
     private fun renderDisplay() {
+        val uiGroup = newGroup()
+        val dockRow = newRow(uiGroup)
+        dockRow.findViewById<TextView>(R.id.row_title).text = "Show dock labels"
+        dockRow.findViewById<TextView>(R.id.row_sub).text =
+            "Show text under left dock icons; off keeps labels hidden"
+        dockRow.findViewById<TextView>(R.id.row_value).text =
+            if (Prefs.dockLabelsVisible(this)) "On" else "Off"
+        dockRow.setOnClickListener {
+            Prefs.setDockLabelsVisible(this, !Prefs.dockLabelsVisible(this))
+            render()
+        }
+        uiGroup.addView(dockRow)
+        content.addView(header("UI settings"))
+        content.addView(uiGroup)
+        content.addView(spacer())
+
         val gpsGroup = newGroup()
         val gpsRow = newRow(gpsGroup)
         gpsRow.findViewById<TextView>(R.id.row_title).text = "Show GPS Status"
