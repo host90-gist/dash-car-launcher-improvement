@@ -17,3 +17,8 @@ captures/
 # can ship an update that installs over a user's copy.
 keystore/
 keystore.properties
+
+# Never commit update signing keys or credentials.
+*.jks
+*.keystore
+qcardash-github-secrets.txt
