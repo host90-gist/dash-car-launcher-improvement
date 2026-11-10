@@ -47,6 +47,7 @@ class SettingsActivity : Activity() {
     }
 
     private companion object {
+        const val EXTRA_OPEN_SECTION = "qcar_open_section"
         const val REQ_PICK_APP = 10
         const val REQ_PICK_IMAGE = 11
         const val REQ_PICK_PACK = 12
@@ -76,6 +77,9 @@ class SettingsActivity : Activity() {
 
         findViewById<View>(R.id.close).setOnClickListener { finish() }
 
+        section = Section.values().firstOrNull {
+            it.name == intent.getStringExtra(EXTRA_OPEN_SECTION)
+        } ?: Section.DOCK
         buildNav()
         render()
     }
