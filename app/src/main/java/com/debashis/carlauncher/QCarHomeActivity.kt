@@ -107,6 +107,7 @@ class QCarHomeActivity : Activity() {
             View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
             View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        window.setWindowAnimations(0)
         window.statusBarColor = bg
         window.navigationBarColor = bg
         window.setBackgroundDrawableResource(android.R.color.black)
@@ -176,24 +177,19 @@ class QCarHomeActivity : Activity() {
         }
         outer.addView(sidebar, lp(72, -1))
         rail(sidebar, "⌂", "HOME") { /* Already home */ }
-        rail(sidebar, "▦", "APPS") { startActivity(Intent(this, DrawerActivity::class.java)) }
+        rail(sidebar, "▦", "APPS") { launchNoAnimation(Intent(this, DrawerActivity::class.java)) }
         rail(sidebar, "⌖", "WAZE") { openWaze() }
         rail(sidebar, "♫", "MUSIC") { openPoweramp() }
         rail(sidebar, "♧", "GPS") {
             GpsControl.toggleOrOpenSettings(this)
         }
-        rail(sidebar, "⚙", "SET") { startActivity(Intent(this, SettingsActivity::class.java)) }
+        rail(sidebar, "ᛒ", "BT") {
+            launchNoAnimation(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+        }
+        rail(sidebar, "⚙", "SET") { launchNoAnimation(Intent(this, SettingsActivity::class.java)) }
 
         val main = column().apply { gravity = Gravity.TOP; setBackgroundColor(bg) }
         outer.addView(main, LinearLayout.LayoutParams(0, -1, 1f))
-
-        val status = row().apply {
-            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
-            setBackgroundColor(bg)
-            setPadding(dp(10), 0, dp(16), 0)
-        }
-        status.addView(text("QCAR DASH  •  ANDROID 10", 11f, muted), lp(-2, 25))
-        main.addView(status, lp(-1, 28))
 
         val dashboard = row().apply { gravity = Gravity.TOP }
         main.addView(dashboard, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -265,7 +261,7 @@ class QCarHomeActivity : Activity() {
         }
         box.addView(content, flp())
         content.addView(text("VEHICLE", 12f, muted, true), lp(-1, 30))
-        content.addView(text("P", 34f, white, true), LinearLayout.LayoutParams(-1, 0, 1f))
+        content.addView(text("—", 34f, white, true), LinearLayout.LayoutParams(-1, 0, 1f))
         content.addView(text("GEAR  —", 12f, muted), lp(-1, 25))
         content.addView(text("RPM  —     °C  —", 12f, muted), lp(-1, 28))
     }
@@ -367,14 +363,20 @@ class QCarHomeActivity : Activity() {
     private fun musicButton(label: String, click: () -> Unit): TextView =
         text(label, 27f, white, true).apply { setOnClickListener { click() } }
 
+    private fun launchNoAnimation(intent: Intent) {
+        startActivity(intent)
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
+    }
+
     private fun openWaze() {
         val intent = packageManager.getLaunchIntentForPackage("com.waze")
-        if (intent != null) startActivity(intent)
-        else startActivity(Intent(Settings.ACTION_APPLICATION_SETTINGS))
+        if (intent != null) launchNoAnimation(intent)
+        else android.widget.Toast.makeText(this, "Install Waze to use navigation", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     private fun openPoweramp() {
-        packageManager.getLaunchIntentForPackage(PowerampBridge.PACKAGE)?.let { startActivity(it) }
+        packageManager.getLaunchIntentForPackage(PowerampBridge.PACKAGE)?.let { launchNoAnimation(it) }
     }
 
     private fun command(code: Int) = Unit.also { PowerampBridge.command(this, code) }
