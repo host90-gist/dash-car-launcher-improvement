@@ -773,8 +773,8 @@ class SettingsActivity : Activity() {
             "1.0"
         }
         addInfo(group, "QCarDash", "Version $version")
-        addInfo(group, "Stock firmware version", HeadUnitSettingsBridge.firmwareVersion())
-        addInfo(group, "MCU", HeadUnitSettingsBridge.mcuVersion())
+        addInfo(group, "Stock firmware version", HeadUnitSettingsBridge.stockSystemVersion(this))
+        addInfo(group, "MCU", HeadUnitSettingsBridge.mcuVersion(this))
         addInfo(group, "Device info", HeadUnitSettingsBridge.deviceInfo(this))
         addInfo(group, "Screen", "${resources.displayMetrics.widthPixels} x " +
                 "${resources.displayMetrics.heightPixels} at ${resources.displayMetrics.densityDpi} dpi")
