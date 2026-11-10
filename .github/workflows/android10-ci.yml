@@ -26,7 +26,30 @@ jobs:
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
-      - name: Assemble debug APK
+      - name: Install permanent signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.QCARDASH_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.QCARDASH_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.QCARDASH_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.QCARDASH_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYSTORE_B64" || -z "$STORE_PASS" || -z "$KEY_ALIAS" || -z "$KEY_PASS" ]]; then
+            echo "::error::Missing QCarDash signing secrets. Follow docs/persistent-apk-signing.md and add all four Actions secrets."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > qcardash-update-signing.jks
+          chmod 600 qcardash-update-signing.jks
+          {
+            echo 'storeFile=qcardash-update-signing.jks'
+            printf 'storePassword=%s\n' "$STORE_PASS"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASS"
+          } > keystore.properties
+          chmod 600 keystore.properties
+          keytool -list -keystore qcardash-update-signing.jks -storepass "$STORE_PASS" -alias "$KEY_ALIAS" >/dev/null
+          echo "Persistent APK signing key installed"
+      - name: Assemble consistently signed debug APK
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
