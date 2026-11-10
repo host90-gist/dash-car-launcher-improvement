@@ -46,7 +46,7 @@ class SettingsActivity : Activity() {
         ABOUT("About", "")
     }
 
-    private companion object {
+    companion object {
         const val EXTRA_OPEN_SECTION = "qcar_open_section"
         const val REQ_PICK_APP = 10
         const val REQ_PICK_IMAGE = 11
