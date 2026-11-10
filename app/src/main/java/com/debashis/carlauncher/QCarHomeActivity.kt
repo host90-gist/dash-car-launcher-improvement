@@ -546,16 +546,16 @@ class QCarHomeActivity : Activity() {
         val gps = lastGpsLocation
         val position = gps?.let { LatLong(it.latitude, it.longitude) }
         val paintHalo = AndroidGraphicFactory.INSTANCE.createPaint().apply {
-            color = AndroidGraphicFactory.INSTANCE.createColor(Color.argb(80, 58, 146, 255))
-            style = Style.FILL
+            setColor(Color.argb(80, 58, 146, 255))
+            setStyle(Style.FILL)
         }
         val paintWhite = AndroidGraphicFactory.INSTANCE.createPaint().apply {
-            color = AndroidGraphicFactory.INSTANCE.createColor(Color.WHITE)
-            style = Style.FILL
+            setColor(Color.WHITE)
+            setStyle(Style.FILL)
         }
         val paintBlue = AndroidGraphicFactory.INSTANCE.createPaint().apply {
-            color = AndroidGraphicFactory.INSTANCE.createColor(Color.rgb(37, 115, 245))
-            style = Style.FILL
+            setColor(Color.rgb(37, 115, 245))
+            setStyle(Style.FILL)
         }
         val halo = FixedPixelCircle(position, 17f, paintHalo, null)
         val rim = FixedPixelCircle(position, 10f, paintWhite, null)
