@@ -19,9 +19,9 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.debashis.carlauncher"
+        applicationId = "org.qcardash.launcher"
         // The head unit is Android 11 / SDK 30 exactly. No compatibility shims needed.
-        minSdk = 30
+        minSdk = 29
         targetSdk = 30
         versionCode = 3
         versionName = "1.2"
