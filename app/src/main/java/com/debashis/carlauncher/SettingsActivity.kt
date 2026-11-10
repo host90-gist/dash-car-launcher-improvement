@@ -3,6 +3,8 @@ package com.debashis.carlauncher
 import android.Manifest
 import android.app.Activity
 import android.app.NotificationManager
+import android.media.AudioManager
+import android.widget.SeekBar
 import android.content.ComponentName
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
@@ -35,6 +37,9 @@ class SettingsActivity : Activity() {
     private enum class Section(val title: String, val subtitle: String) {
         DOCK("Dock", "Eight slots. Tap one to choose a different app."),
         DRIVING("Driving", "What the screen does while the car is moving."),
+        VOLUME("Volume", "Music, navigation, BT call and reverse-camera sound."),
+        NAVIGATION("Navigation", "Choose the navigation app."),
+        BACKCAR("Backcar", "Factory reversing-camera controls."),
         WALLPAPER("Wallpaper", "Shown behind the clock. Landscape images work best."),
         DISPLAY("Display", "Clock format and speed units."),
         PERMISSIONS("Permissions", "Set up location and music metadata access."),
@@ -46,6 +51,8 @@ class SettingsActivity : Activity() {
         const val REQ_PICK_IMAGE = 11
         const val REQ_PICK_PACK = 12
         const val REQ_LOCATION_SETUP = 13
+        const val REQ_PICK_NAVIGATION = 14
+        const val REQ_PICK_MUSIC = 15
     }
 
     private var section = Section.DOCK
@@ -111,6 +118,9 @@ class SettingsActivity : Activity() {
         when (section) {
             Section.DOCK -> renderDock()
             Section.DRIVING -> renderDriving()
+            Section.VOLUME -> renderVolume()
+            Section.NAVIGATION -> renderNavigation()
+            Section.BACKCAR -> renderBackcar()
             Section.WALLPAPER -> renderWallpaper()
             Section.DISPLAY -> renderDisplay()
             Section.PERMISSIONS -> renderPermissions()
@@ -726,6 +736,17 @@ class SettingsActivity : Activity() {
                         editingSlot = -1
                     }
                 }
+                render()
+            }
+            REQ_PICK_NAVIGATION, REQ_PICK_MUSIC -> {
+                val selected = data?.getStringExtra(AppPickerActivity.EXTRA_COMPONENT) ?: return
+                if (selected == Prefs.DRAWER) {
+                    Toast.makeText(this, "Choose an application", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                val key = if (requestCode == REQ_PICK_NAVIGATION)
+                    "qcar_navigation_app" else "qcar_music_app"
+                Prefs.prefs(this).edit().putString(key, selected).apply()
                 render()
             }
             REQ_PICK_PACK -> {
