@@ -20,7 +20,7 @@
         android:supportsRtl="false">
 
         <activity
-            android:name=".HomeActivity"
+            android:name=".QCarHomeActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="landscape"
@@ -50,6 +50,11 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- Original Dash home remains available as fallback, but not the default. -->
+        <activity android:name=".HomeActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
 
         <activity
             android:name=".SetupActivity"
