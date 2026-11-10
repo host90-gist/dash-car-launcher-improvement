@@ -1,9 +1,13 @@
 package com.debashis.carlauncher
 
+import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
+import android.text.InputType
 import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.text.format.DateFormat
@@ -12,6 +16,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -30,6 +35,7 @@ class SettingsActivity : Activity() {
         DRIVING("Driving", "What the screen does while the car is moving."),
         WALLPAPER("Wallpaper", "Shown behind the clock. Landscape images work best."),
         DISPLAY("Display", "Clock format and speed units."),
+        PERMISSIONS("Permissions", "Set up location and music metadata access."),
         ABOUT("About", "")
     }
 
@@ -37,6 +43,7 @@ class SettingsActivity : Activity() {
         const val REQ_PICK_APP = 10
         const val REQ_PICK_IMAGE = 11
         const val REQ_PICK_PACK = 12
+        const val REQ_LOCATION_SETUP = 13
     }
 
     private var section = Section.DOCK
@@ -104,6 +111,7 @@ class SettingsActivity : Activity() {
             Section.DRIVING -> renderDriving()
             Section.WALLPAPER -> renderWallpaper()
             Section.DISPLAY -> renderDisplay()
+            Section.PERMISSIONS -> renderPermissions()
             Section.ABOUT -> renderAbout()
         }
     }
@@ -218,35 +226,23 @@ class SettingsActivity : Activity() {
         onOff.addView(row)
         content.addView(onOff)
 
-        if (!enabled) return
-
-        // Tapping cycles rather than opening a slider. A slider is a precision instrument
-        // and this gets used in a parked car with one thumb.
+        // Thresholds remain editable while drive mode is disabled.
         val thresholds = newGroup()
         val on = Prefs.driveOn(this)
         val off = Prefs.driveOff(this)
-        val unit = if (Prefs.units(this) == Prefs.UNITS_MPH) "mph" else "km/h"
-        val factor = if (Prefs.units(this) == Prefs.UNITS_MPH) 0.621371f else 1f
 
         val onRow = newRow(thresholds)
         onRow.findViewById<TextView>(R.id.row_title).text = "Engage above"
-        onRow.findViewById<TextView>(R.id.row_sub).text = "Tap to change"
-        onRow.findViewById<TextView>(R.id.row_value).text = "${(on * factor).toInt()} $unit"
-        onRow.setOnClickListener {
-            val options = listOf(20, 25, 30, 40, 50, 60)
-            val next = options[(options.indexOf(on).takeIf { i -> i >= 0 }?.plus(1) ?: 0) % options.size]
-            // Keep the gap. Equal thresholds reintroduce exactly the flicker they prevent.
-            Prefs.setDriveThresholds(this, next, (next * 0.6f).toInt())
-            render()
-        }
+        onRow.findViewById<TextView>(R.id.row_sub).text = "Tap to enter exact speed"
+        onRow.findViewById<TextView>(R.id.row_value).text = "$on km/h"
+        onRow.setOnClickListener { editDriveThresholds() }
         thresholds.addView(onRow)
 
         val offRow = newRow(thresholds)
         offRow.findViewById<TextView>(R.id.row_title).text = "Return below"
-        offRow.findViewById<TextView>(R.id.row_sub).text =
-            "Kept lower than the engage speed so traffic does not flicker the screen"
-        offRow.findViewById<TextView>(R.id.row_value).text = "${(off * factor).toInt()} $unit"
-        offRow.isClickable = false
+        offRow.findViewById<TextView>(R.id.row_sub).text = "Tap to enter exact speed"
+        offRow.findViewById<TextView>(R.id.row_value).text = "$off km/h"
+        offRow.setOnClickListener { editDriveThresholds() }
         thresholds.addView(offRow)
 
         content.addView(spacer())
@@ -288,6 +284,135 @@ class SettingsActivity : Activity() {
             setTextColor(getColor(R.color.muted))
             textSize = 14f
             setPadding(dp(6), dp(10), 0, 0)
+        }
+        content.addView(note)
+    }
+
+    /** Two editable numeric fields; persisted in km/h regardless of display units. */
+    private fun editDriveThresholds() {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(12), dp(24), 0)
+        }
+        fun numeric(label: String, value: Int): EditText = EditText(this).apply {
+            hint = label
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+            setText(value.toString())
+            selectAll()
+            layout.addView(this)
+        }
+        val engage = numeric("Engage above (km/h)", Prefs.driveOn(this))
+        val resume = numeric("Return below (km/h)", Prefs.driveOff(this))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Driving thresholds")
+            .setMessage("Enter values in km/h. Engage must be 5–200 km/h and at least 5 km/h higher than return.")
+            .setView(layout)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val on = engage.text.toString().toIntOrNull()
+                val off = resume.text.toString().toIntOrNull()
+                if (on == null || off == null || on !in 5..200 || off < 0 || off > on - 5) {
+                    Toast.makeText(this, "Use 5–200 km/h and keep at least a 5 km/h gap", Toast.LENGTH_LONG).show()
+                } else {
+                    Prefs.setDriveThresholds(this, on, off)
+                    dialog.dismiss()
+                    render()
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun notificationAccessGranted(): Boolean =
+        Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+            ?.contains(packageName) == true
+
+    private fun locationAccessGranted(): Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /** A single setup entry point, not a bypass of Android's permission prompts. */
+    private fun requestRequiredPermissions() {
+        if (!locationAccessGranted()) {
+            requestPermissions(
+                arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION),
+                REQ_LOCATION_SETUP
+            )
+        } else {
+            finishPermissionSetup()
+        }
+    }
+
+    private fun finishPermissionSetup() {
+        if (!notificationAccessGranted()) {
+            try {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(this, "Open system Settings and grant notification access", Toast.LENGTH_LONG).show()
+            }
+        } else if (locationAccessGranted()) {
+            Toast.makeText(this, "Required permissions are already granted", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_LOCATION_SETUP) {
+            // Continue even if location was denied; media access is independent.
+            finishPermissionSetup()
+            if (section == Section.PERMISSIONS) render()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::content.isInitialized && section == Section.PERMISSIONS) render()
+    }
+
+    private fun renderPermissions() {
+        val group = newGroup()
+        val location = newRow(group)
+        location.findViewById<TextView>(R.id.row_title).text = "GPS location"
+        location.findViewById<TextView>(R.id.row_sub).text = "Used for speed and trip data"
+        location.findViewById<ImageView>(R.id.row_icon).setImageResource(R.drawable.ic_qcar_gps)
+        location.findViewById<TextView>(R.id.row_value).text =
+            if (locationAccessGranted()) "Granted" else "Not granted"
+        location.setOnClickListener { requestRequiredPermissions() }
+        group.addView(location)
+
+        val media = newRow(group)
+        media.findViewById<TextView>(R.id.row_title).text = "Media notification access"
+        media.findViewById<TextView>(R.id.row_sub).text = "Required to read Poweramp track details and artwork"
+        media.findViewById<TextView>(R.id.row_value).text =
+            if (notificationAccessGranted()) "Granted" else "Not granted"
+        media.setOnClickListener { finishPermissionSetup() }
+        group.addView(media)
+
+        content.addView(header("Permission status"))
+        content.addView(group)
+
+        val actionGroup = newGroup()
+        val request = newRow(actionGroup)
+        request.findViewById<TextView>(R.id.row_title).text = "Request all required permissions"
+        request.findViewById<TextView>(R.id.row_sub).text =
+            "One setup flow: GPS permission prompt, then Android notification access settings"
+        request.setOnClickListener { requestRequiredPermissions() }
+        actionGroup.addView(request)
+        content.addView(spacer())
+        content.addView(actionGroup)
+
+        val note = TextView(this).apply {
+            text = "Android requires separate confirmation for media notification access. " +
+                "Direct GPS switching also requires system privileges or a separate ADB grant; " +
+                "the launcher cannot grant those privileges itself."
+            setTextColor(getColor(R.color.muted))
+            textSize = 14f
+            setPadding(dp(8), dp(16), dp(8), dp(8))
         }
         content.addView(note)
     }
