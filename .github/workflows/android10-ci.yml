@@ -17,9 +17,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      # Ubuntu GitHub-hosted runners include the Android command-line SDK.
+      # setup-android@v3 attempts to install the removed legacy "tools" package.
       - name: Install compile SDK
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
       - name: Assemble debug APK
         run: |
           chmod +x gradlew
