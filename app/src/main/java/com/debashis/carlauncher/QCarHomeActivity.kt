@@ -13,12 +13,17 @@ import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
-import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.GoogleMap
-import com.google.android.gms.maps.GoogleMapOptions
-import com.google.android.gms.maps.MapView
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.MapStyleOptions
+import android.net.Uri
+import android.util.Log
+import org.mapsforge.core.model.LatLong
+import org.mapsforge.map.android.graphics.AndroidGraphicFactory
+import org.mapsforge.map.android.util.AndroidUtil
+import org.mapsforge.map.android.view.MapView
+import org.mapsforge.map.layer.cache.TileCache
+import org.mapsforge.map.layer.renderer.TileRendererLayer
+import org.mapsforge.map.reader.MapFile
+import org.mapsforge.map.rendertheme.internal.MapsforgeThemes
+import java.io.File
 import android.media.MediaMetadata
 import android.app.NotificationManager
 import android.os.Build
@@ -68,11 +73,13 @@ class QCarHomeActivity : Activity() {
     private var mediaPlay: TextView? = null
     private var mediaProgress: ProgressBar? = null
     private var mapView: MapView? = null
-    private var googleMap: GoogleMap? = null
+    private var mapCache: TileCache? = null
+    private var mapData: MapFile? = null
+    private var mapStatus: TextView? = null
     private var lastGpsLocation: Location? = null
     private var lastCameraLocation: Location? = null
     private var followPosition = true
-    private var savedMapState: Bundle? = null
+    private var mapFilePending = false
     private var lastLocationAt = 0L
     private var lastSpeedKmh = 0f
     private var manager: LocationManager? = null
@@ -152,7 +159,7 @@ class QCarHomeActivity : Activity() {
         window.navigationBarColor = bg
         window.setBackgroundDrawableResource(android.R.color.black)
         manager = getSystemService(LOCATION_SERVICE) as? LocationManager
-        savedMapState = savedInstanceState?.getBundle("google_map_state")
+        AndroidGraphicFactory.createInstance(application)
         setContentView(buildDashboard())
         renderTime()
         renderLocation()
@@ -262,51 +269,25 @@ class QCarHomeActivity : Activity() {
         })
     }
 
-    /** Lightweight static navigation tile: tapping it opens Google Maps externally. */
+    /**
+     * Offline interactive OpenStreetMap panel powered by Mapsforge.
+     * No Google SDK, credentials, Play services, network permissions or
+     * recurring tile downloads. User selects a compatible .map file once.
+     */
     private fun buildNavigation(parent: FrameLayout) {
-        if (hasMapsApiKey()) {
-            try {
-                val options = GoogleMapOptions().mapType(GoogleMap.MAP_TYPE_NORMAL)
-                    .zoomControlsEnabled(false).compassEnabled(false)
-                val view = MapView(this, options)
-                mapView = view
-                parent.addView(view, flp())
-                view.onCreate(savedMapState)
-                view.getMapAsync { ready ->
-                    googleMap = ready
-                    ready.mapType = GoogleMap.MAP_TYPE_NORMAL
-                    ready.uiSettings.isMapToolbarEnabled = false
-                    ready.uiSettings.isCompassEnabled = false
-                    ready.uiSettings.isZoomControlsEnabled = false
-                    ready.uiSettings.isMyLocationButtonEnabled = false
-                    try {
-                        ready.setMapStyle(MapStyleOptions.loadRawResourceStyle(this, R.raw.qcar_map_dark))
-                    } catch (_: Exception) { /* Keep normal tiles if styling is unavailable. */ }
-                    ready.setOnCameraMoveStartedListener { reason ->
-                        if (reason == GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) {
-                            followPosition = false
-                        }
-                    }
-                    lastGpsLocation?.let { updateMapLocation(it, force = true) }
-                }
-            } catch (_: Exception) {
-                mapView = null
-                showMapPlaceholder(parent, "Google Maps could not initialize")
-            }
+        val view = MapView(this)
+        mapView = view
+        view.setBuiltInZoomControls(false)
+        parent.addView(view, flp())
+        if (File(filesDir, "offline-osm.map").exists()) {
+            loadOfflineMap()
         } else {
-            showMapPlaceholder(parent, "Configure MAPS_API_KEY to show the live Google Map")
+            showMapImportHint()
         }
 
-        // QCar-style controls overlay; the rest of the panel retains full map gestures.
-        val compass = mapControl("⌖") {
-            googleMap?.let { map ->
-                map.moveCamera(CameraUpdateFactory.newCameraPosition(
-                    com.google.android.gms.maps.model.CameraPosition.Builder(map.cameraPosition)
-                        .bearing(0f).tilt(0f).build()
-                ))
-            }
-        }
-        parent.addView(compass, flp(39, 39, Gravity.TOP or Gravity.LEFT).apply {
+        val chooseMap = mapControl("MAP") { chooseOfflineMap() }
+        chooseMap.textSize = 11f
+        parent.addView(chooseMap, flp(48, 39, Gravity.TOP or Gravity.LEFT).apply {
             leftMargin = dp(12)
             topMargin = dp(12)
         })
@@ -319,10 +300,10 @@ class QCarHomeActivity : Activity() {
 
         val zoom = column()
         zoom.addView(mapControl("+") {
-            googleMap?.moveCamera(CameraUpdateFactory.zoomIn())
+            mapView?.let { map -> map.setZoomLevel((map.zoomLevel.toInt() + 1).coerceAtMost(20).toByte()) }
         }, lp(39, 39))
         zoom.addView(mapControl("−") {
-            googleMap?.moveCamera(CameraUpdateFactory.zoomOut())
+            mapView?.let { map -> map.setZoomLevel((map.zoomLevel.toInt() - 1).coerceAtLeast(2).toByte()) }
         }, lp(39, 39))
         parent.addView(zoom, flp(41, 84, Gravity.RIGHT or Gravity.BOTTOM).apply {
             rightMargin = dp(12)
@@ -342,50 +323,125 @@ class QCarHomeActivity : Activity() {
     }
 
     private fun mapControl(label: String, click: () -> Unit): TextView =
-        text(label, 24f, white, true).apply {
+        text(label, 23f, white, true).apply {
             background = rounded(Color.argb(235, 21, 21, 21), 5)
             setOnClickListener { click() }
-            isFocusable = true
             contentDescription = when (label) {
+                "MAP" -> "Import offline OpenStreetMap .map file"
+                "⊙" -> "Recenter map on my location"
                 "+" -> "Zoom in"
-                "−" -> "Zoom out"
-                "⊙" -> "Center on my location"
-                else -> "Reset compass"
+                else -> "Zoom out"
             }
         }
 
-    private fun showMapPlaceholder(parent: FrameLayout, message: String) {
-        parent.addView(FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(21, 27, 34))
-            val label = text(message, 14f, muted).apply {
-                setPadding(dp(18), dp(18), dp(18), dp(18))
+    private fun showMapImportHint() {
+        val map = mapView ?: return
+        if (mapStatus == null) {
+            val status = text("Tap MAP to import a Mapsforge offline .map file", 13f, white).apply {
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                background = rounded(Color.argb(226, 20, 20, 20))
+                setOnClickListener { chooseOfflineMap() }
             }
-            addView(label, flp(-1, -2, Gravity.CENTER))
-        }, flp())
+            (map.parent as? FrameLayout)?.addView(
+                status, flp(-1, -2, Gravity.CENTER)
+            )
+            mapStatus = status
+        }
+        mapStatus?.visibility = View.VISIBLE
     }
 
-    private fun hasMapsApiKey(): Boolean = try {
-        val info = packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
-        !info.metaData?.getString("com.google.android.geo.API_KEY").isNullOrBlank()
-    } catch (_: Exception) { false }
+    private fun chooseOfflineMap() {
+        if (mapFilePending) return
+        try {
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "*/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            startActivityForResult(Intent.createChooser(intent, "Select Mapsforge .map file"), 310)
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(
+                this, "Install a file manager to select an offline map",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    @Deprecated("Used for file selection on Android 10 head units")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 310 || resultCode != RESULT_OK) return
+        val uri: Uri = data?.data ?: return
+        mapFilePending = true
+        mapStatus?.text = "Importing offline map…"
+        showMapImportHint()
+        Thread {
+            val dest = File(filesDir, "offline-osm.map")
+            val temp = File(filesDir, "offline-osm.map.tmp")
+            try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    temp.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
+                } ?: throw java.io.IOException("Cannot open selected map")
+                if (temp.length() < 512L) throw java.io.IOException("Invalid or empty .map file")
+                if (dest.exists()) dest.delete()
+                if (!temp.renameTo(dest)) throw java.io.IOException("Could not store map")
+                runOnUiThread {
+                    mapFilePending = false
+                    loadOfflineMap()
+                }
+            } catch (e: Exception) {
+                Log.w("QCarOfflineMap", "Map import failed", e)
+                temp.delete()
+                runOnUiThread {
+                    mapFilePending = false
+                    mapStatus?.text = "Map import failed. Tap to try again."
+                }
+            }
+        }.start()
+    }
+
+    private fun loadOfflineMap() {
+        val map = mapView ?: return
+        val file = File(filesDir, "offline-osm.map")
+        if (!file.exists()) { showMapImportHint(); return }
+        try {
+            map.layerManager.layers.clear()
+            mapCache?.destroy()
+            mapData?.close()
+            val data = MapFile(file)
+            val cache = AndroidUtil.createTileCache(
+                this, "qcar-osm-cache", map.model.displayModel.tileSize, 0.45f,
+                map.model.frameBufferModel.overdrawFactor
+            )
+            val layer = TileRendererLayer(
+                cache, data, map.model.mapViewPosition, AndroidGraphicFactory.INSTANCE
+            )
+            layer.setXmlRenderTheme(MapsforgeThemes.MOTORIDER)
+            map.layerManager.layers.add(layer)
+            mapCache = cache
+            mapData = data
+            map.setCenter(data.startPosition())
+            map.setZoomLevel(data.startZoomLevel())
+            mapStatus?.visibility = View.GONE
+            lastGpsLocation?.let { updateMapLocation(it, force = true) }
+        } catch (e: Exception) {
+            Log.w("QCarOfflineMap", "Map load failed", e)
+            mapStatus?.text = "Unsupported map file. Tap MAP to choose another."
+            showMapImportHint()
+        }
+    }
 
     private fun updateMapLocation(location: Location, force: Boolean = false) {
-        val map = googleMap ?: return
-        if (!followPosition && !force) return
-        val previous = lastCameraLocation
-        if (!force && previous != null && previous.distanceTo(location) < 30f) return
+        val map = mapView ?: return
+        if (mapData == null || (!followPosition && !force)) return
+        if (!force && lastCameraLocation?.distanceTo(location)?.let { it < 30f } == true) return
         lastCameraLocation = Location(location)
-        map.moveCamera(CameraUpdateFactory.newLatLngZoom(
-            LatLng(location.latitude, location.longitude),
-            if (force) 16f else map.cameraPosition.zoom.coerceAtLeast(15f)
-        ))
+        map.setCenter(LatLong(location.latitude, location.longitude))
     }
 
     private fun centerMapOnMyLocation() {
         followPosition = true
-        val last = lastGpsLocation
-        if (last != null) updateMapLocation(last, force = true)
-        else if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+        lastGpsLocation?.let { updateMapLocation(it, force = true); return }
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED) {
             try {
                 manager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let {
@@ -696,7 +752,6 @@ class QCarHomeActivity : Activity() {
             addAction(Intent.ACTION_TIME_CHANGED)
             addAction(Intent.ACTION_TIMEZONE_CHANGED)
         })
-        mapView?.onStart()
         startGps()
         startMedia()
         handler.post(tick)
@@ -704,7 +759,6 @@ class QCarHomeActivity : Activity() {
 
     override fun onStop() {
         handler.removeCallbacks(tick)
-        mapView?.onStop()
         stopGps()
         stopMedia()
         unregisterReceiver(timeReceiver)
@@ -713,32 +767,17 @@ class QCarHomeActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        mapView?.onResume()
         renderTime()
         renderLocation()
     }
 
-    override fun onPause() {
-        mapView?.onPause()
-        super.onPause()
-    }
-
     override fun onDestroy() {
-        mapView?.onDestroy()
-        googleMap = null
+        mapView?.destroyAll()
+        mapView = null
+        mapData = null
+        mapCache = null
+        AndroidGraphicFactory.clearResourceMemoryCache()
         super.onDestroy()
-    }
-
-    override fun onLowMemory() {
-        super.onLowMemory()
-        mapView?.onLowMemory()
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        val mapState = Bundle()
-        mapView?.onSaveInstanceState(mapState)
-        outState.putBundle("google_map_state", mapState)
-        super.onSaveInstanceState(outState)
     }
 
     @Deprecated("Use gesture navigation")
