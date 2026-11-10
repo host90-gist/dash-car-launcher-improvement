@@ -108,7 +108,25 @@
                         android:text="Waiting for GPS"
                         android:textColor="@color/ink_soft"
                         android:textSize="14.5dp"
-                        android:fontFamily="sans-serif-medium" />
+                        android:fontFamily="sans-serif-medium" android:drawableStart="@drawable/ic_qcar_gps"
+                        android:drawablePadding="8dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        />
+                    <!-- AdBlue placeholder: await verified ECU mapping. -->
+                    <TextView
+                        android:id="@+id/adblue_placeholder"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:background="@drawable/chip_bg"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp"
+                        android:text="AdBlue —"
+                        android:textColor="@color/ink_soft"
+                        android:textSize="14.5sp" />
                 </LinearLayout>
             </LinearLayout>
 
