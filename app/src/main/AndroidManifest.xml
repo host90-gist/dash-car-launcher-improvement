@@ -75,6 +75,14 @@
             android:theme="@style/DashTheme.Opaque" />
 
         <activity
+            android:name=".SavedRoutesActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|keyboardHidden|screenSize|uiMode"
+            android:excludeFromRecents="true"
+            android:theme="@style/DashTheme.Opaque" />
+
+        <activity
             android:name=".SettingsActivity"
             android:exported="false"
             android:screenOrientation="landscape"
