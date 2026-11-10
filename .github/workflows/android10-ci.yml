@@ -1,6 +1,6 @@
 name: Android 10 APK build
 
-# Build requested for OEM-screen and Google-free navigation validation.
+# Offline Mapsforge Android 10 test build. No Google API key required.
 on:
   push:
     branches: [qcar-google-maps-sdk-test]
@@ -27,14 +27,12 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
       - name: Assemble debug APK
-        env:
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
       - name: Publish APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qcardash-android10-debug
+          name: qcardash-android10-mapsforge-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
