@@ -421,13 +421,6 @@ class QCarHomeActivity : Activity() {
         migrateOldMap()
         loadOfflineMaps()
 
-        val chooseMap = mapControl("MAP") { chooseOfflineMap() }
-        chooseMap.textSize = 11f
-        parent.addView(chooseMap, flp(48, 39, Gravity.TOP or Gravity.LEFT).apply {
-            leftMargin = dp(12)
-            topMargin = dp(12)
-        })
-
         val recenter = mapControl("⊙") { centerMapOnMyLocation() }
         parent.addView(recenter, flp(39, 39, Gravity.TOP or Gravity.RIGHT).apply {
             rightMargin = dp(12)
@@ -465,17 +458,40 @@ class QCarHomeActivity : Activity() {
             bottomMargin = dp(12)
         })
 
-        fun importButton(name: String, code: Int, top: Int) {
-            val button = mapControl(name) { chooseDataImport(code) }
-            button.textSize = 11f
-            parent.addView(button, flp(48, 39, Gravity.TOP or Gravity.LEFT).apply {
-                leftMargin = dp(12)
-                topMargin = dp(top)
+        // Collapsed menu keeps map controls compact while still accessible.
+        val mapMenu = column().apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.TOP
+        }
+        val menuItems = column().apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.TOP
+            visibility = View.GONE
+            background = rounded(Color.argb(245, 12, 12, 12), 7)
+            setPadding(dp(3), dp(4), dp(3), dp(4))
+        }
+        val menuButton = mapControl("☰") {
+            menuItems.visibility =
+                if (menuItems.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
+        menuButton.textSize = 25f
+        menuButton.contentDescription = "Open map options"
+        mapMenu.addView(menuButton, lp(48, 42))
+        fun addMenuChoice(name: String, description: String, action: () -> Unit) {
+            val button = mapControl(name) {
+                menuItems.visibility = View.GONE
+                action()
+            }
+            button.textSize = 13f
+            button.contentDescription = description
+            menuItems.addView(button, LinearLayout.LayoutParams(dp(90), dp(43)).apply {
+                topMargin = dp(3)
             })
         }
-        importButton("GPX", 311, 57)
-        importButton("POI", 312, 102)
-        val speedZoom = mapControl("AUTO") {
+        addMenuChoice("MAP", "Import offline country map") { chooseOfflineMap() }
+        addMenuChoice("GPX", "Import GPX route or track") { chooseDataImport(311) }
+        addMenuChoice("POI", "Import GPX, CSV or VCF points") { chooseDataImport(312) }
+        addMenuChoice("AUTO", "Toggle speed-based zoom") {
             val next = !Prefs.prefs(this).getBoolean("qcar_speed_zoom", false)
             Prefs.prefs(this).edit().putBoolean("qcar_speed_zoom", next).apply()
             android.widget.Toast.makeText(this,
@@ -483,10 +499,10 @@ class QCarHomeActivity : Activity() {
                 android.widget.Toast.LENGTH_SHORT).show()
             if (next) lastGpsLocation?.let { updateSpeedZoom(it, true) }
         }
-        speedZoom.textSize = 10f
-        parent.addView(speedZoom, flp(48, 39, Gravity.TOP or Gravity.LEFT).apply {
+        mapMenu.addView(menuItems, lp(-2, -2))
+        parent.addView(mapMenu, flp(-2, -2, Gravity.TOP or Gravity.LEFT).apply {
             leftMargin = dp(12)
-            topMargin = dp(147)
+            topMargin = dp(12)
         })
         restoreNavigationOverlays()
     }
