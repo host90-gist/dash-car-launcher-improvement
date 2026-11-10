@@ -3,6 +3,8 @@ package com.debashis.carlauncher
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.text.Editable
+import android.text.TextWatcher
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -54,6 +56,9 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.EditText
+import android.widget.ListView
+import android.widget.ArrayAdapter
 import java.text.SimpleDateFormat
 import java.io.FileOutputStream
 import java.util.Date
@@ -102,6 +107,7 @@ class QCarHomeActivity : Activity() {
     private var lastCameraLocation: Location? = null
     private var followPosition = true
     private val routeSegments = ArrayList<List<LatLong>>()
+    private val loadedPoiSources = ArrayList<String>()
     private val poiData = ArrayList<OfflineNavigationData.Poi>()
     private val overlayLayers = ArrayList<org.mapsforge.map.layer.Layer>()
     private var lastPoiAlertAt = 0L
@@ -494,6 +500,7 @@ class QCarHomeActivity : Activity() {
         }
         addMenuChoice("MAP", "Import offline country map") { chooseOfflineMap() }
         addMenuChoice("GPX", "Import GPX route or track") { chooseDataImport(311) }
+        addMenuChoice("SAVED", "Browse saved routes and points") { showSavedNavigationLibrary() }
         addMenuChoice("POI", "Import GPX, CSV or VCF points") { chooseDataImport(312) }
         addMenuChoice("AUTO", "Toggle speed-based zoom") {
             val next = !Prefs.prefs(this).getBoolean("qcar_speed_zoom", false)
@@ -595,16 +602,24 @@ class QCarHomeActivity : Activity() {
                         "No GPS waypoints / camera points found")
                     confirmation = "POIs loaded: " + points.size
                 }
-                val destination = File(folder, if (code == 311) "route.gpx"
-                    else if (isGpx) "cameras.gpx"
-                    else if (isVcf) "destinations.vcf" else "cameras.csv")
-                if (code == 312) {
-                    listOf("cameras.gpx", "cameras.csv", "destinations.vcf").forEach { filename ->
-                        val existing = File(folder, filename)
-                        if (existing != destination) existing.delete()
-                    }
+                // Preserve every imported file. Legacy files from older builds
+                // remain usable. A unique filename prevents silent replacement.
+                val safe = name.substringBeforeLast('.').replace(
+                    Regex("[^a-zA-Z0-9._-]"), "_"
+                ).take(65).trim('.').ifBlank { "imported" }
+                val extension = if (isGpx) "gpx" else if (isVcf) "vcf" else "csv"
+                val prefix = if (code == 311) "route-" else "poi-"
+                var destination = File(folder, prefix + safe + "." + extension)
+                var suffix = 2
+                while (destination.exists()) {
+                    destination = File(folder, prefix + safe + "-" + suffix++ + "." + extension)
                 }
-                temporary.copyTo(destination, overwrite = true)
+                temporary.copyTo(destination)
+                if (code == 311) {
+                    Prefs.prefs(this).edit().putString(
+                        "qcar_active_route", destination.name
+                    ).apply()
+                }
             } catch (e: Exception) {
                 error = e.message ?: e.javaClass.simpleName
                 Log.e("QCarOfflineNav", "Navigation import failed", e)
@@ -627,36 +642,200 @@ class QCarHomeActivity : Activity() {
         }.start()
     }
 
+    private fun savedRouteFiles(): List<File> =
+        navDataFolder().listFiles { file ->
+            file.isFile && file.extension.equals("gpx", true) &&
+                (file.name == "route.gpx" || file.name.startsWith("route-"))
+        }?.sortedBy { it.name.lowercase(Locale.US) }.orEmpty()
+
+    private fun savedPoiFiles(): List<File> =
+        navDataFolder().listFiles { file ->
+            file.isFile && (file.name.startsWith("poi-") ||
+                file.name in listOf("cameras.gpx", "cameras.csv", "destinations.vcf")) &&
+                file.extension.lowercase(Locale.US) in listOf("gpx", "csv", "txt", "vcf")
+        }?.sortedBy { it.name.lowercase(Locale.US) }.orEmpty()
+
+    private fun labelOfNavigationFile(file: File): String =
+        file.nameWithoutExtension.removePrefix("route-").removePrefix("poi-")
+            .replace('_', ' ').ifBlank { file.nameWithoutExtension }
+
+    private fun readPoiFile(file: File): List<OfflineNavigationData.Poi> =
+        when (file.extension.lowercase(Locale.US)) {
+            "gpx" -> file.inputStream().use { OfflineNavigationData.parseGpx(it).waypoints }
+            "vcf" -> OfflineNavigationData.parseVcards(file)
+            else -> OfflineNavigationData.parsePoiCsv(file)
+        }
+
     private fun restoreNavigationOverlays() {
         routeSegments.clear()
         poiData.clear()
-        val directory = navDataFolder()
-        val routeFile = File(directory, "route.gpx")
-        if (routeFile.exists()) {
+        loadedPoiSources.clear()
+        val routeFiles = savedRouteFiles()
+        val selected = Prefs.prefs(this).getString("qcar_active_route", null)
+        val activeFile = routeFiles.firstOrNull { it.name == selected }
+            ?: routeFiles.firstOrNull()
+        if (activeFile != null) {
             try {
-                val parsed = routeFile.inputStream().use { OfflineNavigationData.parseGpx(it) }
-                routeSegments.addAll(parsed.segments)
+                routeSegments.addAll(activeFile.inputStream().use {
+                    OfflineNavigationData.parseGpx(it).segments
+                })
             } catch (e: Exception) {
-                Log.w("QCarOfflineNav", "Bad saved GPX route", e)
+                Log.w("QCarOfflineNav", "Could not load route " + activeFile.name, e)
             }
         }
-        val poiGpx = File(directory, "cameras.gpx")
-        val poiCsv = File(directory, "cameras.csv")
-        val poiVcf = File(directory, "destinations.vcf")
-        try {
-            if (poiGpx.exists()) {
-                poiData.addAll(poiGpx.inputStream().use {
-                    OfflineNavigationData.parseGpx(it).waypoints
-                })
-            } else if (poiCsv.exists()) {
-                poiData.addAll(OfflineNavigationData.parsePoiCsv(poiCsv))
-            } else if (poiVcf.exists()) {
-                poiData.addAll(OfflineNavigationData.parseVcards(poiVcf))
+        // Keep a bounded number of imported datasets to avoid exhausting the
+        // head unit memory. All saved files remain listed in the library.
+        for (file in savedPoiFiles().take(40)) {
+            try {
+                val points = readPoiFile(file)
+                val space = (12000 - poiData.size).coerceAtLeast(0)
+                poiData.addAll(points.take(space))
+                loadedPoiSources.add(file.name)
+                if (poiData.size >= 12000) break
+            } catch (e: Exception) {
+                Log.w("QCarOfflineNav", "Could not load POIs " + file.name, e)
             }
-        } catch (e: Exception) {
-            Log.w("QCarOfflineNav", "Bad saved POIs", e)
         }
         drawNavigationOverlays()
+    }
+
+    /** Browse imported routes and POIs without panning around the map. */
+    private fun showSavedNavigationLibrary() {
+        val routes = savedRouteFiles()
+        val poiFiles = savedPoiFiles()
+        if (routes.isEmpty() && poiFiles.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Saved routes & POIs")
+                .setMessage("No saved routes or POIs yet. Use GPX or POI in the map menu to import them.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        val screen = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(4))
+        }
+        val search = EditText(this).apply {
+            hint = "Search routes or POIs"
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+        }
+        screen.addView(search, LinearLayout.LayoutParams(-1, dp(52)))
+        val listView = ListView(this)
+        screen.addView(listView, LinearLayout.LayoutParams(-1, dp(350)))
+        val entries = ArrayList<Pair<String, () -> Unit>>()
+        for (file in routes) {
+            entries.add(("Route: " + labelOfNavigationFile(file)) to {
+                selectSavedRoute(file)
+            })
+        }
+        // Display each imported POI as a selectable named destination, including
+        // those not currently drawn (only nearest 350 markers are drawn).
+        for (file in poiFiles.take(40)) {
+            entries.add(("POI file: " + labelOfNavigationFile(file)) to {
+                showSavedPoiFile(file)
+            })
+        }
+        var visible = entries.toList()
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1,
+            ArrayList(entries.map { it.first }))
+        listView.adapter = adapter
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Saved routes & POIs")
+            .setView(screen)
+            .setNegativeButton("Close", null)
+            .create()
+        fun filter(value: String) {
+            visible = entries.filter { it.first.contains(value, ignoreCase = true) }
+            adapter.clear()
+            adapter.addAll(visible.map { it.first })
+            adapter.notifyDataSetChanged()
+        }
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                filter(s?.toString().orEmpty())
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        listView.setOnItemClickListener { _, _, position, _ ->
+            val action = visible.getOrNull(position)?.second ?: return@setOnItemClickListener
+            dialog.dismiss()
+            action()
+        }
+        dialog.show()
+    }
+
+    private fun selectSavedRoute(file: File) {
+        try {
+            val parsed = file.inputStream().use { OfflineNavigationData.parseGpx(it) }
+            if (parsed.segments.isEmpty()) throw IllegalArgumentException("No route track found")
+            Prefs.prefs(this).edit().putString("qcar_active_route", file.name).apply()
+            routeSegments.clear()
+            routeSegments.addAll(parsed.segments)
+            drawNavigationOverlays()
+            val first = parsed.segments.first().first()
+            followPosition = false
+            mapView?.setCenter(first)
+            mapView?.setZoomLevel(13.toByte())
+            android.widget.Toast.makeText(this,
+                "Showing route: " + labelOfNavigationFile(file),
+                android.widget.Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this, "Unable to read route: " + e.message,
+                android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun showSavedPoiFile(file: File) {
+        val points = try {
+            readPoiFile(file)
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this,
+                "Unable to read POI file: " + e.message,
+                android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        if (points.isEmpty()) {
+            android.widget.Toast.makeText(this, "No POIs in this file",
+                android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        val screen = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(4))
+        }
+        val search = EditText(this).apply {
+            hint = "Search locations"
+            setSingleLine(true)
+        }
+        screen.addView(search, LinearLayout.LayoutParams(-1, dp(52)))
+        val list = ListView(this)
+        screen.addView(list, LinearLayout.LayoutParams(-1, dp(350)))
+        var visible = points.take(5000)
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1,
+            ArrayList(visible.map { it.title }))
+        list.adapter = adapter
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(labelOfNavigationFile(file) + " (" + points.size + " POIs)")
+            .setView(screen)
+            .setNegativeButton("Close", null).create()
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                visible = points.filter { it.title.contains(s?.toString().orEmpty(), true) }
+                    .take(5000)
+                adapter.clear()
+                adapter.addAll(visible.map { it.title })
+                adapter.notifyDataSetChanged()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        list.setOnItemClickListener { _, _, position, _ ->
+            val poi = visible.getOrNull(position) ?: return@setOnItemClickListener
+            dialog.dismiss()
+            showPoiDetails(poi)
+        }
+        dialog.show()
     }
 
     /** Reinstall overlays after .map changes reset the map layer stack. */
