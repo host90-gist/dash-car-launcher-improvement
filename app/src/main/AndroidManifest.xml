@@ -4,6 +4,8 @@
     <!-- GPS speed readout. There is no CAN bus on a Grand i10 Magna, so speed comes from GPS. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Only effective for appropriately privileged installations. -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <!-- Required from API 30 to see other installed apps at all (tiles + drawer). -->
@@ -19,6 +21,9 @@
         android:theme="@style/DashTheme"
         android:allowBackup="false"
         android:supportsRtl="false">
+
+        <meta-data android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
 
         <activity
             android:name=".QCarHomeActivity"
