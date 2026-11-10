@@ -3,12 +3,16 @@ package com.debashis.carlauncher
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.provider.Settings
 import android.util.Log
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayInputStream
+import java.io.ObjectInputStream
+import com.carocean.navicar.Navi
 import kotlin.math.ceil
 
 /**
@@ -94,6 +98,35 @@ object HeadUnitSettingsBridge {
      * ST_SYSTEM_PARAM_INFO record, not a public Android Build property.
      * Do not guess a version from Android's build identifier.
      */
-    fun mcuVersion(): String = property("persist.sys.mcu_version")
-        ?: "Unavailable to this app — see stock About"
+    /** Stock firmware stores both fields in one Java-serialized provider record. */
+    private fun systemParameters(context: Context): Navi.Status.SystemParamInfo? {
+        return try {
+            val uri = Uri.parse(
+                "content://com.carocean.status.provider/status/ST_SYSTEM_PARAM_INFO"
+            )
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst() && cursor.columnCount > 1) {
+                    val blob = cursor.getBlob(1) ?: return null
+                    if (blob.size < 16 || blob.size > 1048576) return null
+                    ObjectInputStream(ByteArrayInputStream(blob)).use { reader ->
+                        reader.readObject() as? Navi.Status.SystemParamInfo
+                    }
+                } else null
+            }
+        } catch (error: Exception) {
+            Log.d(TAG, "Stock MCU info provider not accessible", error)
+            null
+        }
+    }
+
+    fun mcuVersion(context: Context): String =
+        systemParameters(context)?.mcu_version?.takeIf {
+            it.isNotBlank() && it != "MCU-VERSION"
+        } ?: property("persist.sys.mcu_version")
+            ?: "Unavailable — check stock About"
+
+    fun stockSystemVersion(context: Context): String =
+        systemParameters(context)?.system_version?.takeIf {
+            it.isNotBlank() && it != "android 9.0"
+        } ?: firmwareVersion()
 }
