@@ -420,9 +420,9 @@ class QCarHomeActivity : Activity() {
     private fun chooseOfflineMap() {
         if (mapFilePending) return
         try {
-            // Android's document picker accepts large local map files and
-            // provides stable content:// streams on Android 10+ head units.
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            // Many Android head units ship a vendor file manager but no
+            // Android DocumentsUI. GET_CONTENT is compatible with both.
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "*/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
                 putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
