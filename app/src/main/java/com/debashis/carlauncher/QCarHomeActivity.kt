@@ -2,6 +2,7 @@ package com.debashis.carlauncher
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -16,6 +17,7 @@ import android.location.LocationManager
 import android.net.Uri
 import android.util.Log
 import org.mapsforge.core.model.LatLong
+import org.mapsforge.core.model.Point
 import org.mapsforge.map.android.graphics.AndroidGraphicFactory
 import org.mapsforge.map.android.util.AndroidUtil
 import org.mapsforge.map.android.view.MapView
@@ -57,6 +59,8 @@ import java.io.FileOutputStream
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.cos
+import kotlin.math.pow
 
 /**
  * QCar-inspired dashboard implemented with framework Views.
@@ -694,11 +698,113 @@ class QCarHomeActivity : Activity() {
                 origin.distanceTo(location)
             }.take(350)
         for (poi in visible) {
-            val circle = FixedPixelCircle(poi.point, 6f, poiPaint, null)
+            // Mapsforge distributes tap events to its overlay layers.
+            // A larger touch tolerance than the visible marker makes POIs
+            // usable on a head unit while preserving the offline map.
+            val circle = object : FixedPixelCircle(poi.point, dp(9).toFloat(),
+                poiPaint, null) {
+                override fun onTap(tapLatLong: LatLong, layerXY: Point,
+                    tapXY: Point): Boolean {
+                    val metersPerPixel = 156543.03392 *
+                        cos(Math.toRadians(poi.point.latitude)) /
+                        2.0.pow(map.model.mapViewPosition.zoomLevel.toInt().toDouble())
+                    val hitMeters = (dp(24) * metersPerPixel).coerceAtLeast(10.0)
+                    val distance = FloatArray(1)
+                    Location.distanceBetween(
+                        tapLatLong.latitude, tapLatLong.longitude,
+                        poi.point.latitude, poi.point.longitude, distance
+                    )
+                    if (distance[0] > hitMeters) return false
+                    showPoiDetails(poi)
+                    return true
+                }
+            }
             map.layerManager.layers.add(circle)
             overlayLayers.add(circle)
         }
         map.layerManager.redrawLayers()
+    }
+
+    /** Display the imported POI's information without leaving QCarDash. */
+    private fun showPoiDetails(poi: OfflineNavigationData.Poi) {
+        val lat = poi.point.latitude
+        val lon = poi.point.longitude
+        val formatted = String.format(Locale.US, "%.6f, %.6f", lat, lon)
+        val distance = lastGpsLocation?.let { gps ->
+            val result = FloatArray(1)
+            Location.distanceBetween(gps.latitude, gps.longitude, lat, lon, result)
+            if (result[0] >= 1000f)
+                String.format(Locale.getDefault(), "%.1f km away", result[0] / 1000.0)
+            else result[0].roundToInt().toString() + " m away"
+        } ?: "GPS location unavailable"
+        val source = if (File(navDataFolder(), "destinations.vcf").exists())
+            "Imported destination"
+        else "Imported POI (location not independently verified)"
+        AlertDialog.Builder(this)
+            .setTitle(poi.title.ifBlank { "Imported POI" })
+            .setMessage(source + "\n" + distance + "\nCoordinates: " +
+                formatted + "\n\nNavigate opens your chosen navigation app.")
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Center map") { _, _ ->
+                mapView?.setCenter(poi.point)
+            }
+            .setPositiveButton("Navigate") { _, _ ->
+                navigateToPoi(poi)
+            }
+            .show()
+    }
+
+    /**
+     * Navigation apps calculate the route. Do not start a package's default
+     * activity as fallback: that can silently drop the destination or open
+     * the OEM AV-in app.
+     */
+    private fun navigateToPoi(poi: OfflineNavigationData.Poi) {
+        val selected = Prefs.prefs(this).getString("qcar_navigation_app", null)
+        if (selected.isNullOrBlank()) {
+            AlertDialog.Builder(this)
+                .setTitle("Choose navigation app")
+                .setMessage("Select Waze, Google Maps, Organic Maps or another " +
+                    "navigation app in Settings → Navigation first.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Open navigation settings") { _, _ ->
+                    launchNoAnimation(Intent(this, SettingsActivity::class.java)
+                        .putExtra(SettingsActivity.EXTRA_OPEN_SECTION, "NAVIGATION"))
+                }
+                .show()
+            return
+        }
+        val packageName = selected.substringBefore('/').trim()
+        if (packageName.isBlank()) return
+        val coordinates = String.format(Locale.US, "%.7f,%.7f",
+            poi.point.latitude, poi.point.longitude)
+        val destination = when (packageName) {
+            "com.waze" -> Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://waze.com/ul?ll=" + coordinates + "&navigate=yes"))
+                    .setPackage(packageName)
+            "com.google.android.apps.maps" -> Intent(Intent.ACTION_VIEW,
+                Uri.parse("google.navigation:q=" + coordinates))
+                    .setPackage(packageName)
+            else -> Intent(Intent.ACTION_VIEW,
+                Uri.parse("geo:0,0?q=" + coordinates))
+                    .setPackage(packageName)
+        }
+        try {
+            launchNoAnimation(destination)
+        } catch (e: Exception) {
+            Log.w("QCarOfflineNav", "Selected navigation app could not accept POI", e)
+            AlertDialog.Builder(this)
+                .setTitle("Navigation app unavailable")
+                .setMessage("The chosen app (" + packageName + ") could not accept this " +
+                    "destination. Select another app in Navigation settings. " +
+                    "Some apps only open a location, then require you to tap Directions.")
+                .setNegativeButton("Close", null)
+                .setPositiveButton("Choose another app") { _, _ ->
+                    launchNoAnimation(Intent(this, SettingsActivity::class.java)
+                        .putExtra(SettingsActivity.EXTRA_OPEN_SECTION, "NAVIGATION"))
+                }
+                .show()
+        }
     }
 
     private fun updateSpeedZoom(location: Location, force: Boolean = false) {
