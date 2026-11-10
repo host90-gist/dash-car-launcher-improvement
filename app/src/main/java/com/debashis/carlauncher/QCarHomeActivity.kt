@@ -476,7 +476,7 @@ class QCarHomeActivity : Activity() {
             contentDescription = when (label) {
                 "MAP" -> "Import additional offline OpenStreetMap maps"
                 "GPX" -> "Import GPX track or route"
-                "POI" -> "Import GPX waypoints or CSV camera locations"
+                "POI" -> "Import GPX waypoints, CSV camera locations or vCard GEO destinations"
                 "AUTO" -> "Toggle automatic speed-based zoom"
                 "⊙" -> "Recenter map on my location"
                 "+" -> "Zoom in"
@@ -518,10 +518,11 @@ class QCarHomeActivity : Activity() {
                 val isGpx = name.endsWith(".gpx", true)
                 val isCsv = name.endsWith(".csv", true) ||
                     name.endsWith(".txt", true)
+                val isVcf = name.endsWith(".vcf", true)
                 if (code == 311 && !isGpx)
                     throw IllegalArgumentException("Choose a .gpx route file")
-                if (code == 312 && !isGpx && !isCsv)
-                    throw IllegalArgumentException("Choose a .gpx or .csv POI file")
+                if (code == 312 && !isGpx && !isCsv && !isVcf)
+                    throw IllegalArgumentException("Choose a .gpx, .csv or .vcf POI file")
                 contentResolver.openInputStream(uri)?.use { input ->
                     temporary.outputStream().use { output ->
                         val buffer = ByteArray(65536)
@@ -546,15 +547,20 @@ class QCarHomeActivity : Activity() {
                 } else {
                     val points = if (isGpx)
                         temporary.inputStream().use { OfflineNavigationData.parseGpx(it).waypoints }
+                    else if (isVcf) OfflineNavigationData.parseVcards(temporary)
                     else OfflineNavigationData.parsePoiCsv(temporary)
                     if (points.isEmpty()) throw IllegalArgumentException(
                         "No GPS waypoints / camera points found")
                     confirmation = "POIs loaded: " + points.size
                 }
                 val destination = File(folder, if (code == 311) "route.gpx"
-                    else if (isGpx) "cameras.gpx" else "cameras.csv")
+                    else if (isGpx) "cameras.gpx"
+                    else if (isVcf) "destinations.vcf" else "cameras.csv")
                 if (code == 312) {
-                    File(folder, if (isGpx) "cameras.csv" else "cameras.gpx").delete()
+                    listOf("cameras.gpx", "cameras.csv", "destinations.vcf").forEach { filename ->
+                        val existing = File(folder, filename)
+                        if (existing != destination) existing.delete()
+                    }
                 }
                 temporary.copyTo(destination, overwrite = true)
             } catch (e: Exception) {
@@ -594,6 +600,7 @@ class QCarHomeActivity : Activity() {
         }
         val poiGpx = File(directory, "cameras.gpx")
         val poiCsv = File(directory, "cameras.csv")
+        val poiVcf = File(directory, "destinations.vcf")
         try {
             if (poiGpx.exists()) {
                 poiData.addAll(poiGpx.inputStream().use {
@@ -601,6 +608,8 @@ class QCarHomeActivity : Activity() {
                 })
             } else if (poiCsv.exists()) {
                 poiData.addAll(OfflineNavigationData.parsePoiCsv(poiCsv))
+            } else if (poiVcf.exists()) {
+                poiData.addAll(OfflineNavigationData.parseVcards(poiVcf))
             }
         } catch (e: Exception) {
             Log.w("QCarOfflineNav", "Bad saved POIs", e)
@@ -676,7 +685,8 @@ class QCarHomeActivity : Activity() {
 
     /** Offline warning for a nearby imported fixed POI, not live reporting. */
     private fun alertNearbyCameras(location: Location) {
-        if (poiData.isEmpty() || !location.hasSpeed() || location.speed < 2.0f) return
+        if (poiData.isEmpty() || !location.hasSpeed() || location.speed < 2.0f ||
+            File(navDataFolder(), "destinations.vcf").exists()) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastPoiAlertAt < 90000L) return
         val closest = poiData.asSequence().map { poi ->
