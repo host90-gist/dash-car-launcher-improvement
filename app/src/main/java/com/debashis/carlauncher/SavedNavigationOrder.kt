@@ -37,8 +37,9 @@ object SavedNavigationOrder {
     fun ordered(context: Context, routes: Boolean, available: List<String>): List<String> {
         val persisted = read(context, category(routes))
         val availableSet = available.toHashSet()
+        val persistedSet = persisted.toHashSet()
         return (persisted.filter { it in availableSet } +
-            available.filterNot { it in persisted }).distinct()
+            available.filterNot { it in persistedSet }).distinct()
     }
 
     fun move(context: Context, routes: Boolean, available: List<String>,
@@ -57,6 +58,9 @@ object SavedNavigationOrder {
     fun dropRoute(context: Context, routeKey: String, available: List<String>) {
         save(context, ROUTES, ordered(context, true, available).filterNot { it == routeKey })
     }
+
+    fun hiddenPoiKeys(context: Context): Set<String> =
+        Prefs.prefs(context).getStringSet(HIDDEN_POIS, emptySet()).orEmpty().toSet()
 
     fun isPoiHidden(context: Context, key: String): Boolean =
         key in Prefs.prefs(context).getStringSet(HIDDEN_POIS, emptySet()).orEmpty()
