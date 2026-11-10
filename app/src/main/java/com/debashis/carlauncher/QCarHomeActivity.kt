@@ -23,6 +23,7 @@ import org.mapsforge.map.datastore.MultiMapDataStore
 import org.mapsforge.map.layer.overlay.FixedPixelCircle
 import org.mapsforge.core.graphics.Style
 import android.provider.OpenableColumns
+import android.database.Cursor
 import org.mapsforge.map.layer.cache.TileCache
 import org.mapsforge.map.layer.renderer.TileRendererLayer
 import org.mapsforge.map.reader.MapFile
@@ -95,6 +96,7 @@ class QCarHomeActivity : Activity() {
     private var lastCameraLocation: Location? = null
     private var followPosition = true
     private var mapFilePending = false
+    private var importedMapsStatus: String? = null
     private var lastLocationAt = 0L
     private var lastSpeedKmh = 0f
     private var manager: LocationManager? = null
@@ -379,20 +381,25 @@ class QCarHomeActivity : Activity() {
             }
         }
 
-    private fun showMapImportHint() {
+    private fun showMapStatus(message: String) {
         val map = mapView ?: return
         if (mapStatus == null) {
-            val status = text("Tap MAP to import country .map files", 13f, white).apply {
+            val status = text(message, 13f, white).apply {
                 setPadding(dp(12), dp(12), dp(12), dp(12))
                 background = rounded(Color.argb(226, 20, 20, 20))
-                setOnClickListener { chooseOfflineMap() }
+                setOnClickListener { if (!mapFilePending) chooseOfflineMap() }
+                maxLines = 4
             }
-            (map.parent as? FrameLayout)?.addView(
-                status, flp(-1, -2, Gravity.CENTER)
-            )
+            (map.parent as? FrameLayout)?.addView(status, flp(-1, -2, Gravity.CENTER))
             mapStatus = status
         }
+        mapStatus?.text = message
         mapStatus?.visibility = View.VISIBLE
+        Log.i("QCarOfflineMap", message)
+    }
+
+    private fun showMapImportHint() {
+        showMapStatus("Tap MAP to import country .map files")
     }
 
     /** Installed offline regions survive launcher restarts and app updates. */
@@ -413,12 +420,14 @@ class QCarHomeActivity : Activity() {
     private fun chooseOfflineMap() {
         if (mapFilePending) return
         try {
-            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            // Android's document picker accepts large local map files and
+            // provides stable content:// streams on Android 10+ head units.
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 type = "*/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
                 putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             }
-            startActivityForResult(Intent.createChooser(intent, "Import offline country maps"), 310)
+            startActivityForResult(intent, 310)
         } catch (_: Exception) {
             android.widget.Toast.makeText(
                 this, "Install a file manager to import offline maps",
@@ -439,38 +448,78 @@ class QCarHomeActivity : Activity() {
         val selected = uris.distinct()
         if (selected.isEmpty() || mapFilePending) return
         mapFilePending = true
-        mapStatus?.text = "Importing maps..."
-        showMapImportHint()
+        showMapStatus("Importing " + selected.size + " offline map(s)...")
         Thread {
             var imported = 0
             var failed = 0
-            for (uri in selected) {
+            var lastFailure: String? = null
+            for ((index, uri) in selected.withIndex()) {
+                runOnUiThread {
+                    showMapStatus(
+                        "Importing map " + (index + 1) + "/" + selected.size +
+                            " (large maps can take a while)..."
+                    )
+                }
                 try {
-                    importCountryMap(uri)
+                    importCountryMap(uri) { bytes ->
+                        // Report progress periodically, not on every copied buffer.
+                        val mb = bytes / (1024L * 1024L)
+                        runOnUiThread {
+                            showMapStatus(
+                                "Importing " + (index + 1) + "/" + selected.size +
+                                    ": " + mb + " MB copied..."
+                            )
+                        }
+                    }
                     imported++
                 } catch (e: Exception) {
                     failed++
-                    Log.w("QCarOfflineMap", "Import failed", e)
+                    lastFailure = e.message ?: e.javaClass.simpleName
+                    Log.e("QCarOfflineMap", "Import failed: " + uri, e)
                 }
             }
+            val errors = lastFailure
+            val added = imported
+            val failures = failed
             runOnUiThread {
                 mapFilePending = false
                 loadOfflineMaps()
-                android.widget.Toast.makeText(
-                    this, "Maps imported: " + imported + ", failed: " + failed,
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
+                if (failures > 0) {
+                    val result = "Imported " + added + ", failed " + failures +
+                        ": " + errors
+                    if (loadedMapCount == 0) showMapStatus(result)
+                    android.widget.Toast.makeText(this, result, android.widget.Toast.LENGTH_LONG).show()
+                } else if (added > 0) {
+                    android.widget.Toast.makeText(
+                        this, "Loaded " + loadedMapCount + " offline map(s)",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }.start()
     }
 
     /** Stream potentially large maps without holding them in RAM. */
-    private fun importCountryMap(uri: Uri) {
+    private fun importCountryMap(uri: Uri, onProgress: (Long) -> Unit) {
         val directory = mapFolder()
         val temp = File.createTempFile("import-", ".tmp", directory)
         try {
             contentResolver.openInputStream(uri)?.use { input ->
-                temp.outputStream().use { output -> input.copyTo(output, 65536) }
+                temp.outputStream().use { output ->
+                    val buffer = ByteArray(65536)
+                    var total = 0L
+                    var nextReport = 8L * 1024L * 1024L
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        output.write(buffer, 0, n)
+                        total += n
+                        if (total >= nextReport) {
+                            onProgress(total)
+                            nextReport = total + 8L * 1024L * 1024L
+                        }
+                    }
+                }
             } ?: throw java.io.IOException("Map cannot be read")
             if (temp.length() < 512L) throw java.io.IOException("Map is empty")
             // Constructing MapFile validates Mapsforge format before it becomes permanent.
@@ -530,8 +579,7 @@ class QCarHomeActivity : Activity() {
             }
             if (count == 0) {
                 combined.close()
-                mapStatus?.text = "No valid .map files. Tap MAP to import."
-                showMapImportHint()
+                showMapStatus("No valid Mapsforge .map files. Tap MAP to try again.")
                 return
             }
 
@@ -568,8 +616,7 @@ class QCarHomeActivity : Activity() {
         } catch (e: Exception) {
             Log.w("QCarOfflineMap", "Could not load offline map library", e)
             combined.close()
-            mapStatus?.text = "Unable to load maps. Tap MAP to retry."
-            showMapImportHint()
+            showMapStatus("Map load error: " + (e.message ?: e.javaClass.simpleName))
         }
     }
 
