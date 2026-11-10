@@ -107,6 +107,7 @@ class QCarHomeActivity : Activity() {
     private var mapPane: FrameLayout? = null
     private var tilesPane: LinearLayout? = null
     private var dataImportPending = false
+    private var mapResizeRedraw: Runnable? = null
     private var mapFilePending = false
     private var importedMapsStatus: String? = null
     private var lastLocationAt = 0L
@@ -360,8 +361,23 @@ class QCarHomeActivity : Activity() {
             it.weight = 1f - safe
             tilesPane?.layoutParams = it
         }
-        if (save) Prefs.prefs(this).edit()
-            .putFloat("qcar_map_split_ratio", safe).apply()
+        if (save) {
+            Prefs.prefs(this).edit()
+                .putFloat("qcar_map_split_ratio", safe).apply()
+            scheduleMapRedraw()
+        }
+    }
+
+    private fun scheduleMapRedraw() {
+        mapResizeRedraw?.let { handler.removeCallbacks(it) }
+        val redraw = Runnable {
+            val map = mapView ?: return@Runnable
+            if (map.width <= 0 || map.height <= 0) return@Runnable
+            map.layerManager.redrawLayers()
+            map.repaint()
+        }
+        mapResizeRedraw = redraw
+        handler.postDelayed(redraw, 180L)
     }
 
     private fun rail(parent: LinearLayout, symbol: String, label: String, onClick: () -> Unit) {
@@ -396,6 +412,12 @@ class QCarHomeActivity : Activity() {
         mapView = view
         view.setBuiltInZoomControls(false)
         parent.addView(view, flp())
+        // Force the Mapsforge framebuffer to refresh after a layout resize.
+        view.addOnLayoutChangeListener { _, left, top, right, bottom,
+                oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft ||
+                bottom - top != oldBottom - oldTop) scheduleMapRedraw()
+        }
         migrateOldMap()
         loadOfflineMaps()
 
@@ -915,7 +937,7 @@ class QCarHomeActivity : Activity() {
             }
 
             val cache = AndroidUtil.createTileCache(
-                this, "qcar-multimap-cache", map.model.displayModel.tileSize, 0.45f,
+                this, "qcar-multimap-cache", map.model.displayModel.tileSize, 1.0f,
                 map.model.frameBufferModel.overdrawFactor
             )
             val layer = TileRendererLayer(
@@ -945,6 +967,7 @@ class QCarHomeActivity : Activity() {
             drawNavigationOverlays()
             mapStatus?.visibility = View.GONE
             lastGpsLocation?.let { updateMapLocation(it, force = true) }
+            scheduleMapRedraw()
         } catch (e: Exception) {
             Log.w("QCarOfflineMap", "Could not load offline map library", e)
             combined.close()
@@ -1418,6 +1441,8 @@ class QCarHomeActivity : Activity() {
     }
 
     override fun onDestroy() {
+        mapResizeRedraw?.let { handler.removeCallbacks(it) }
+        mapResizeRedraw = null
         mapView?.destroyAll()
         mapView = null
         mapData = null
