@@ -1,13 +1,5 @@
 import java.util.Properties
 
-// The Maps SDK key is supplied locally or by a CI secret (never committed).
-val mapsLocalProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use { load(it) }
-}
-val mapsApiKey = System.getenv("MAPS_API_KEY")
-    ?: mapsLocalProperties.getProperty("MAPS_API_KEY", "")
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -33,7 +25,6 @@ android {
         targetSdk = 30
         versionCode = 3
         versionName = "1.2"
-        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
     }
 
     signingConfigs {
@@ -72,8 +63,5 @@ android {
     }
 }
 
-// Keep the interface framework-only; the Maps SDK is the one required external dependency.
-dependencies {
-    // QCarLauncher uses an embedded Google Map, not an external Maps shortcut.
-    implementation("com.google.android.gms:play-services-maps:20.1.0")
-}
+// No Google Play services dependencies. Keep the launcher small and framework-only.
+dependencies { }
