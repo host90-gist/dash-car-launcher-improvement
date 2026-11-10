@@ -310,7 +310,7 @@ class QCarHomeActivity : Activity() {
             "NAVI" -> "Navigation"
             else -> label
         }
-        val sym = text(symbol, if (showLabels) 26f else 30f,
+        val sym = text(symbol, if (showLabels) 26f else 32.5f,
             if (label == "HOME") accent else white).apply {
             gravity = Gravity.CENTER
         }
