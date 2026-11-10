@@ -3,7 +3,7 @@ name: Android 10 APK build
 # Build requested for OEM-screen and Google-free navigation validation.
 on:
   push:
-    branches: [qcar-android10-poweramp-gps]
+    branches: [qcar-google-maps-sdk-test]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,8 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
       - name: Assemble debug APK
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
