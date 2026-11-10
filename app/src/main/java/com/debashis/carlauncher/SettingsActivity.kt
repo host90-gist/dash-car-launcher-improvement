@@ -2,6 +2,8 @@ package com.debashis.carlauncher
 
 import android.Manifest
 import android.app.Activity
+import android.app.NotificationManager
+import android.content.ComponentName
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -327,9 +329,11 @@ class SettingsActivity : Activity() {
         dialog.show()
     }
 
-    private fun notificationAccessGranted(): Boolean =
-        Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
-            ?.contains(packageName) == true
+    private fun notificationAccessGranted(): Boolean {
+        val component = ComponentName(this, DashNotificationListener::class.java)
+        return (getSystemService(NOTIFICATION_SERVICE) as? NotificationManager)
+            ?.isNotificationListenerAccessGranted(component) == true
+    }
 
     private fun locationAccessGranted(): Boolean =
         checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -387,7 +391,8 @@ class SettingsActivity : Activity() {
 
         val media = newRow(group)
         media.findViewById<TextView>(R.id.row_title).text = "Media notification access"
-        media.findViewById<TextView>(R.id.row_sub).text = "Required to read Poweramp track details and artwork"
+        media.findViewById<TextView>(R.id.row_sub).text =
+            "Android 14: first allow restricted settings from this app's Android App info if blocked"
         media.findViewById<TextView>(R.id.row_value).text =
             if (notificationAccessGranted()) "Granted" else "Not granted"
         media.setOnClickListener { finishPermissionSetup() }
