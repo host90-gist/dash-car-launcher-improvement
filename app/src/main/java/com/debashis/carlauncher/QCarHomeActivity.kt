@@ -14,6 +14,8 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.media.MediaMetadata
+import android.app.NotificationManager
+import android.os.Build
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
@@ -65,6 +67,31 @@ class QCarHomeActivity : Activity() {
     private var sessionManager: MediaSessionManager? = null
     private var mediaController: MediaController? = null
     private var sessionRegistered = false
+    private var powerampTitle: String? = null
+    private var powerampArtist: String? = null
+    private var powerampPaused: Boolean? = null
+    private var powerampEventsRegistered = false
+
+    /** Poweramp v3 broadcasts include metadata without a notification-listener grant. */
+    private val powerampEvents = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                PowerampBridge.TRACK_CHANGED -> {
+                    val track = intent.getBundleExtra("track")
+                    if (track != null) {
+                        powerampTitle = track.getString("title")
+                        powerampArtist = track.getString("artist")
+                        renderMedia()
+                    }
+                }
+                PowerampBridge.STATUS_CHANGED -> {
+                    powerampPaused = intent.getBooleanExtra("paused", true)
+                    renderMedia()
+                }
+            }
+        }
+    }
+
 
     private val locationListener = LocationListener { location: Location ->
         lastLocationAt = SystemClock.elapsedRealtime()
@@ -115,6 +142,9 @@ class QCarHomeActivity : Activity() {
         renderTime()
         renderLocation()
         renderMedia()
+        mediaArtist?.setOnClickListener {
+            if (!notificationAccessGranted()) openNotificationAccess() else openPoweramp()
+        }
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 109)
     }
@@ -372,11 +402,55 @@ class QCarHomeActivity : Activity() {
         packageManager.getLaunchIntentForPackage(PowerampBridge.PACKAGE)?.let { launchNoAnimation(it) }
     }
 
-    private fun command(code: Int) = Unit.also { PowerampBridge.command(this, code) }
+    private fun command(code: Int) {
+        // Use media sessions when available; otherwise use Poweramp's public API.
+        val controller = mediaController?.takeIf { it.packageName == PowerampBridge.PACKAGE }
+        val actions = controller?.playbackState?.actions ?: 0L
+        val required = when (code) {
+            PowerampBridge.PREVIOUS -> PlaybackState.ACTION_SKIP_TO_PREVIOUS
+            PowerampBridge.NEXT -> PlaybackState.ACTION_SKIP_TO_NEXT
+            PowerampBridge.PAUSE -> PlaybackState.ACTION_PAUSE
+            else -> PlaybackState.ACTION_PLAY
+        }
+        if (controller != null && actions and required != 0L) {
+            try {
+                when (code) {
+                    PowerampBridge.PREVIOUS -> controller.transportControls.skipToPrevious()
+                    PowerampBridge.NEXT -> controller.transportControls.skipToNext()
+                    PowerampBridge.PAUSE -> controller.transportControls.pause()
+                    else -> controller.transportControls.play()
+                }
+                return
+            } catch (_: Exception) { /* Fall through to direct API. */ }
+        }
+        if (!PowerampBridge.command(this, code)) {
+            android.widget.Toast.makeText(
+                this, "Unable to send Poweramp command", android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     private fun toggleMusic() {
-        val state = mediaController?.playbackState?.state
-        command(if (state == PlaybackState.STATE_PLAYING) PowerampBridge.PAUSE else PowerampBridge.PLAY)
+        val playing = mediaController?.playbackState?.state == PlaybackState.STATE_PLAYING ||
+            (mediaController == null && powerampPaused == false)
+        command(if (playing) PowerampBridge.PAUSE else PowerampBridge.PLAY)
+    }
+
+    private fun notificationAccessGranted(): Boolean {
+        val component = ComponentName(this, DashNotificationListener::class.java)
+        return (getSystemService(NOTIFICATION_SERVICE) as? NotificationManager)
+            ?.isNotificationListenerAccessGranted(component) == true
+    }
+
+    private fun openNotificationAccess() {
+        try {
+            launchNoAnimation(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(
+                this, "Open system settings and grant notification access",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun renderTime() {
@@ -420,10 +494,24 @@ class QCarHomeActivity : Activity() {
     }
 
     private fun startMedia() {
-        val listeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
-        if (listeners?.contains(packageName) != true) {
-            mediaTitle?.text = "Poweramp"
-            mediaArtist?.text = "Enable notification access for track info"
+        // Sticky Poweramp broadcasts supply track data without notification access.
+        if (!powerampEventsRegistered) {
+            val filter = IntentFilter().apply {
+                addAction(PowerampBridge.TRACK_CHANGED)
+                addAction(PowerampBridge.STATUS_CHANGED)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= 33) {
+                    registerReceiver(powerampEvents, filter, Context.RECEIVER_EXPORTED)
+                } else {
+                    @Suppress("DEPRECATION")
+                    registerReceiver(powerampEvents, filter)
+                }
+                powerampEventsRegistered = true
+            } catch (_: Exception) { }
+        }
+        if (!notificationAccessGranted()) {
+            renderMedia()
             return
         }
         val component = ComponentName(this, DashNotificationListener::class.java)
@@ -432,10 +520,16 @@ class QCarHomeActivity : Activity() {
             sessionManager?.addOnActiveSessionsChangedListener(sessionsChanged, component)
             sessionRegistered = true
             selectSession(sessionManager?.getActiveSessions(component))
-        } catch (_: SecurityException) { }
+        } catch (_: SecurityException) {
+            renderMedia()
+        }
     }
 
     private fun stopMedia() {
+        if (powerampEventsRegistered) {
+            try { unregisterReceiver(powerampEvents) } catch (_: Exception) { }
+            powerampEventsRegistered = false
+        }
         mediaController?.unregisterCallback(mediaCallback)
         mediaController = null
         if (sessionRegistered) {
@@ -449,13 +543,17 @@ class QCarHomeActivity : Activity() {
         val controller = mediaController
         val metadata = controller?.metadata
         mediaTitle?.text = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
-            ?.takeIf { it.isNotBlank() } ?: "Poweramp"
+            ?.takeIf { it.isNotBlank() } ?: powerampTitle?.takeIf { it.isNotBlank() } ?: "Poweramp"
         mediaArtist?.text = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
-            ?.takeIf { it.isNotBlank() } ?: "Tap OPEN to play music"
+            ?.takeIf { it.isNotBlank() } ?: powerampArtist?.takeIf { it.isNotBlank() }
+            ?: if (!notificationAccessGranted())
+                "Tap here for notification access (Android 14: allow restricted settings first)"
+            else "Open Poweramp to start playback"
         val cover = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         mediaArt?.setImageBitmap(cover)
-        mediaPlay?.text = if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) "Ⅱ" else "▶"
+        mediaPlay?.text = if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING ||
+            (controller == null && powerampPaused == false)) "Ⅱ" else "▶"
         renderMediaProgress()
     }
 
