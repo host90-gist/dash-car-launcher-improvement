@@ -110,6 +110,65 @@ object OfflineNavigationData {
         return Gpx(segments, waypoints)
     }
 
+    /**
+     * vCard destinations, including the vCards discussed for spiels-mir.de/navi.
+     * These are POINTS, never a road route.
+     *
+     * Standard GEO uses latitude;longitude; older VW / SEAT navigation exports
+     * sometimes swap the two. Prefer the European lat/lon interpretation where
+     * one candidate is a plausible European coordinate and the other is not.
+     */
+    fun parseVcards(file: File): List<Poi> {
+        val result = ArrayList<Poi>()
+        var name = "Navigation destination"
+        var geo: String? = null
+        var inCard = false
+        fun emit() {
+            val raw = geo ?: return
+            val parts = raw.trim().removePrefix("geo:")
+                .split(';', ',').map { it.trim() }
+            if (parts.size < 2) return
+            val first = parts[0].toDoubleOrNull() ?: return
+            val second = parts[1].toDoubleOrNull() ?: return
+            val standard = coordinates(first.toString(), second.toString())
+            val swapped = coordinates(second.toString(), first.toString())
+            val firstEuropeanLatitude = first in 35.0..72.0 &&
+                second in -15.0..36.0
+            val secondEuropeanLatitude = second in 35.0..72.0 &&
+                first in -15.0..36.0
+            val point = when {
+                secondEuropeanLatitude && !firstEuropeanLatitude -> swapped
+                else -> standard
+            }
+            if (point != null && result.size < 5000) {
+                result.add(Poi(point, name.take(90)))
+            }
+        }
+        file.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            lines.forEach { line ->
+                val trimmed = line.trim()
+                when {
+                    trimmed.equals("BEGIN:VCARD", true) -> {
+                        inCard = true
+                        name = "Navigation destination"
+                        geo = null
+                    }
+                    trimmed.equals("END:VCARD", true) -> {
+                        if (inCard) emit()
+                        inCard = false
+                    }
+                    inCard && trimmed.startsWith("GEO", true) && ':' in trimmed ->
+                        geo = trimmed.substringAfter(':')
+                    inCard && trimmed.startsWith("FN", true) && ':' in trimmed ->
+                        name = trimmed.substringAfter(':')
+                }
+            }
+        }
+        if (result.isEmpty()) throw IllegalArgumentException(
+            "No vCard destinations with GEO coordinates found")
+        return result
+    }
+
     /** CSV: latitude,longitude,name OR longitude,latitude,name if header says so.
      *  Semicolons supported for common European exports. */
     fun parsePoiCsv(file: File): List<Poi> {
