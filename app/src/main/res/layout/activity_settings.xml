@@ -27,13 +27,21 @@
             android:letterSpacing="-0.02"
             android:fontFamily="sans-serif-medium" />
 
-        <!-- populated in code so the selected state is one code path -->
-        <LinearLayout
-            android:id="@+id/nav"
+        <!-- Keep every settings section accessible on small head-unit displays. -->
+        <ScrollView
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:orientation="vertical" />
+            android:fillViewport="false"
+            android:scrollbars="none"
+            android:clipToPadding="false">
+
+            <LinearLayout
+                android:id="@+id/nav"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
 
         <TextView
             android:id="@+id/close"
