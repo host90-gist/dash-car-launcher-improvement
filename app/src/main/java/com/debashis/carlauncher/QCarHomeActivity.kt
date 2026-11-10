@@ -310,6 +310,14 @@ class QCarHomeActivity : Activity() {
             bottomMargin = dp(12)
         })
 
+        val attribution = text("© OpenStreetMap contributors", 9f, muted).apply {
+            background = rounded(Color.argb(215, 15, 15, 15), 3)
+        }
+        parent.addView(attribution, flp(170, 23, Gravity.LEFT or Gravity.BOTTOM).apply {
+            leftMargin = dp(8)
+            bottomMargin = dp(8)
+        })
+
         val bubble = column().apply {
             setPadding(dp(5), dp(4), dp(5), dp(4))
             background = rounded(Color.argb(230, 0, 0, 0), 25)
