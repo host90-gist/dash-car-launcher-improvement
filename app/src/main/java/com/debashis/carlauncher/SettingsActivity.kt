@@ -766,7 +766,14 @@ class SettingsActivity : Activity() {
             if (preferences.getBoolean("qcar_poweramp_auto_open", false)) "On" else "Off"
         launchRow.setOnClickListener {
             val enabled = !preferences.getBoolean("qcar_poweramp_auto_open", false)
-            preferences.edit().putBoolean("qcar_poweramp_auto_open", enabled).apply()
+            val bootCount = Settings.Global.getInt(contentResolver,
+                Settings.Global.BOOT_COUNT, -1)
+            preferences.edit()
+                .putBoolean("qcar_poweramp_auto_open", enabled)
+                // Enabling a setting must not start Poweramp immediately:
+                // defer until the next detected device reboot.
+                .putInt("qcar_poweramp_last_boot", bootCount)
+                .apply()
             render()
         }
         group.addView(launchRow)
