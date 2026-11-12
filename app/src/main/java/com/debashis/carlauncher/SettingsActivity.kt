@@ -38,6 +38,7 @@ class SettingsActivity : Activity() {
         DOCK("Dock", "Eight slots. Tap one to choose a different app."),
         DRIVING("Driving", "What the screen does while the car is moving."),
         VOLUME("Volume", "Music, navigation, BT call and reverse-camera sound."),
+        POWERAMP("Poweramp", "Control Poweramp startup and playback."),
         NAVIGATION("Navigation", "Choose the navigation app."),
         BACKCAR("Backcar", "Factory reversing-camera controls."),
         WALLPAPER("Wallpaper", "Shown behind the clock. Landscape images work best."),
@@ -123,6 +124,7 @@ class SettingsActivity : Activity() {
             Section.DOCK -> renderDock()
             Section.DRIVING -> renderDriving()
             Section.VOLUME -> renderVolume()
+            Section.POWERAMP -> renderPoweramp()
             Section.NAVIGATION -> renderNavigation()
             Section.BACKCAR -> renderBackcar()
             Section.WALLPAPER -> renderWallpaper()
@@ -750,6 +752,47 @@ class SettingsActivity : Activity() {
         content.addView(spacer())
         content.addView(header("App selection"))
         content.addView(appGroup)
+    }
+
+    private fun renderPoweramp() {
+        val group = newGroup()
+        val preferences = Prefs.prefs(this)
+
+        val launchRow = newRow(group)
+        launchRow.findViewById<TextView>(R.id.row_title).text = "Auto-open Poweramp"
+        launchRow.findViewById<TextView>(R.id.row_sub).text =
+            "Open Poweramp once when QCarDash starts after a device reboot"
+        launchRow.findViewById<TextView>(R.id.row_value).text =
+            if (preferences.getBoolean("qcar_poweramp_auto_open", false)) "On" else "Off"
+        launchRow.setOnClickListener {
+            val enabled = !preferences.getBoolean("qcar_poweramp_auto_open", false)
+            preferences.edit().putBoolean("qcar_poweramp_auto_open", enabled).apply()
+            render()
+        }
+        group.addView(launchRow)
+
+        val resumeRow = newRow(group)
+        resumeRow.findViewById<TextView>(R.id.row_title).text = "Keep Playing Last Song"
+        resumeRow.findViewById<TextView>(R.id.row_sub).text =
+            "When auto-open runs, request Poweramp to resume its previous track"
+        resumeRow.findViewById<TextView>(R.id.row_value).text =
+            if (preferences.getBoolean("qcar_poweramp_keep_playing", false)) "On" else "Off"
+        resumeRow.setOnClickListener {
+            val enabled = !preferences.getBoolean("qcar_poweramp_keep_playing", false)
+            preferences.edit().putBoolean("qcar_poweramp_keep_playing", enabled).apply()
+            render()
+        }
+        group.addView(resumeRow)
+        content.addView(group)
+        content.addView(spacer())
+        val information = newGroup()
+        val info = newRow(information)
+        info.findViewById<TextView>(R.id.row_title).text = "How Poweramp startup works"
+        info.findViewById<TextView>(R.id.row_sub).text =
+            "Options apply after the next full device reboot. " +
+            "Playback resumes only if Poweramp has a previous track and accepts the Play command."
+        information.addView(info)
+        content.addView(information)
     }
 
     private fun renderNavigation() {
