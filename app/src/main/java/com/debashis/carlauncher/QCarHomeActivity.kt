@@ -1537,6 +1537,40 @@ class QCarHomeActivity : Activity() {
         }
     }
 
+    /**
+     * The HOME activity is the safe foreground entry point on vendor head
+     * units. Android 10+ limits launching activities from background boot
+     * receivers, so detect the system boot count here instead of hijacking
+     * startup with an unreliable BOOT_COMPLETED receiver.
+     */
+    private fun autoOpenPowerampAfterBoot() {
+        val prefs = Prefs.prefs(this)
+        if (!prefs.getBoolean("qcar_poweramp_auto_open", false)) return
+        val bootCount = Settings.Global.getInt(
+            contentResolver, Settings.Global.BOOT_COUNT, -1)
+        if (bootCount < 0 ||
+            prefs.getInt("qcar_poweramp_last_boot", bootCount) == bootCount) return
+        // Record before launch: returning from Poweramp must never reopen it
+        // in a loop, and launching Settings must not trigger another start.
+        prefs.edit().putInt("qcar_poweramp_last_boot", bootCount).apply()
+        val target = packageManager.getLaunchIntentForPackage(PowerampBridge.PACKAGE)
+        if (target == null) {
+            Log.w("QCarPoweramp", "Auto-open skipped: Poweramp not installed")
+            return
+        }
+        try {
+            launchNoAnimation(target)
+            if (prefs.getBoolean("qcar_poweramp_keep_playing", false)) {
+                // Give the app time to initialize its player after cold boot.
+                handler.postDelayed({
+                    PowerampBridge.command(this, PowerampBridge.PLAY)
+                }, 3000L)
+            }
+        } catch (e: Exception) {
+            Log.w("QCarPoweramp", "Auto-open unavailable", e)
+        }
+    }
+
     private fun openPoweramp() {
         packageManager.getLaunchIntentForPackage(PowerampBridge.PACKAGE)?.let { launchNoAnimation(it) }
     }
@@ -1777,6 +1811,7 @@ class QCarHomeActivity : Activity() {
         renderMedia()
         renderTime()
         renderLocation()
+        autoOpenPowerampAfterBoot()
     }
 
     override fun onDestroy() {
