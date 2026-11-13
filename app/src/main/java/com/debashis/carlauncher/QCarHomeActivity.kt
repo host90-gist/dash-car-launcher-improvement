@@ -1402,7 +1402,7 @@ class QCarHomeActivity : Activity() {
         content.addView(text("◈", 35f, accent), LinearLayout.LayoutParams(-1, 0, 1f))
         fuelView = text("— L", 29f, white, true)
         content.addView(fuelView, lp(-1, 35))
-        content.addView(text("LITERS", 10f, muted), lp(-1, 25))
+        content.addView(text("", 10f, muted), lp(-1, 25))
     }
 
     private fun addTemperature(parent: LinearLayout) {
