@@ -1398,8 +1398,8 @@ class QCarHomeActivity : Activity() {
         box.addView(content, flp())
         content.addView(text("FUEL", 13f, white, true), lp(-1, 35))
         content.addView(text("◈", 35f, accent), LinearLayout.LayoutParams(-1, 0, 1f))
-        content.addView(text("—", 29f, white, true), lp(-1, 35))
-        content.addView(text("LEVEL DATA PENDING", 10f, muted), lp(-1, 25))
+        content.addView(text("— L", 29f, white, true), lp(-1, 35))
+        content.addView(text("LITERS", 10f, muted), lp(-1, 25))
     }
 
     private fun addTemperature(parent: LinearLayout) {
