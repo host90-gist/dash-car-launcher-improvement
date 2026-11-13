@@ -87,6 +87,8 @@ class QCarHomeActivity : Activity() {
     private var speedView: TextView? = null
     private var clockView: TextView? = null
     private var dateView: TextView? = null
+    private var fuelView: TextView? = null
+    private var mcuVehicleBridge: McuVehicleBridge? = null
     private var mediaTitle: TextView? = null
     private var mediaArtist: TextView? = null
     private var mediaArt: ImageView? = null
@@ -1398,7 +1400,8 @@ class QCarHomeActivity : Activity() {
         box.addView(content, flp())
         content.addView(text("FUEL", 13f, white, true), lp(-1, 35))
         content.addView(text("◈", 35f, accent), LinearLayout.LayoutParams(-1, 0, 1f))
-        content.addView(text("— L", 29f, white, true), lp(-1, 35))
+        fuelView = text("— L", 29f, white, true)
+        content.addView(fuelView, lp(-1, 35))
         content.addView(text("LITERS", 10f, muted), lp(-1, 25))
     }
 
@@ -1794,6 +1797,19 @@ class QCarHomeActivity : Activity() {
         })
         startGps()
         startMedia()
+        if (mcuVehicleBridge == null) {
+            mcuVehicleBridge = McuVehicleBridge(this,
+                object : McuVehicleBridge.Listener {
+                    override fun onFuelLiters(liters: Int) {
+                        fuelView?.text = liters.toString() + " L"
+                    }
+
+                    override fun onDisconnected() {
+                        fuelView?.text = "— L"
+                    }
+                })
+        }
+        mcuVehicleBridge?.start()
         handler.post(tick)
     }
 
@@ -1801,6 +1817,7 @@ class QCarHomeActivity : Activity() {
         handler.removeCallbacks(tick)
         stopGps()
         stopMedia()
+        mcuVehicleBridge?.stop()
         unregisterReceiver(timeReceiver)
         super.onStop()
     }
@@ -1817,6 +1834,8 @@ class QCarHomeActivity : Activity() {
     override fun onDestroy() {
         mapResizeRedraw?.let { handler.removeCallbacks(it) }
         mapResizeRedraw = null
+        mcuVehicleBridge?.stop()
+        mcuVehicleBridge = null
         mapView?.destroyAll()
         mapView = null
         mapData = null
