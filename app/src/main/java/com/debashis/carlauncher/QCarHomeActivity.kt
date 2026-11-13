@@ -350,7 +350,7 @@ class QCarHomeActivity : Activity() {
         val upper = row().apply { gravity = Gravity.TOP }
         right.addView(upper, weightedHeight(0.36f))
         addVehicle(upper)
-        addAdBlue(upper)
+        addFuel(upper)
         addTemperature(upper)
         addClock(upper)
 
@@ -1391,15 +1391,15 @@ class QCarHomeActivity : Activity() {
         content.addView(text("RPM  —     °C  —", 12f, muted), lp(-1, 28))
     }
 
-    private fun addAdBlue(parent: LinearLayout) {
+    private fun addFuel(parent: LinearLayout) {
         val box = card()
         parent.addView(box, inset(box, 0, -1, 2.5f))
         val content = column().apply { setPadding(dp(5), dp(8), dp(5), dp(8)) }
         box.addView(content, flp())
-        content.addView(text("ADBLUE", 13f, white, true), lp(-1, 35))
+        content.addView(text("FUEL", 13f, white, true), lp(-1, 35))
         content.addView(text("◈", 35f, accent), LinearLayout.LayoutParams(-1, 0, 1f))
         content.addView(text("—", 29f, white, true), lp(-1, 35))
-        content.addView(text("CAN DATA PENDING", 10f, muted), lp(-1, 25))
+        content.addView(text("LEVEL DATA PENDING", 10f, muted), lp(-1, 25))
     }
 
     private fun addTemperature(parent: LinearLayout) {
