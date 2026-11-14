@@ -3,6 +3,8 @@ name: Android 10 APK build
 # Offline Mapsforge Android 10 test build. No Google API key required.
 # Explicitly manual until the next APK is requested.
 on:
+  push:
+    branches: [qcar-google-maps-sdk-test]
   workflow_dispatch:
 
 permissions:
