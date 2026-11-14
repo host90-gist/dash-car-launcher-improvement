@@ -1574,6 +1574,31 @@ class QCarHomeActivity : Activity() {
         }
     }
 
+    private fun autoStartCameraAlertAfterBoot() {
+        val prefs = Prefs.prefs(this)
+        if (!prefs.getBoolean("qcar_cameraalert_autostart", false)) return
+        val bootCount = Settings.Global.getInt(
+            contentResolver, Settings.Global.BOOT_COUNT, -1)
+        if (bootCount < 0 ||
+            prefs.getInt("qcar_cameraalert_last_boot", bootCount) == bootCount) return
+
+        // Mark first so returning from the no-display helper cannot cause a loop.
+        prefs.edit().putInt("qcar_cameraalert_last_boot", bootCount).apply()
+
+        val target = Intent().apply {
+            component = ComponentName(
+                "io.github.host90gist.cameraalertlite",
+                "io.github.host90gist.cameraalertlite.StartAlertsActivity"
+            )
+        }
+        try {
+            launchNoAnimation(target)
+        } catch (e: Exception) {
+            Log.w("QCarCameraAlert",
+                "CameraAlert Lite background startup entry point unavailable", e)
+        }
+    }
+
     private fun openPoweramp() {
         packageManager.getLaunchIntentForPackage(PowerampBridge.PACKAGE)?.let { launchNoAnimation(it) }
     }
@@ -1829,6 +1854,7 @@ class QCarHomeActivity : Activity() {
         renderTime()
         renderLocation()
         autoOpenPowerampAfterBoot()
+        autoStartCameraAlertAfterBoot()
     }
 
     override fun onDestroy() {
