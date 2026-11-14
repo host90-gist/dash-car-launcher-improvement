@@ -790,6 +790,25 @@ class SettingsActivity : Activity() {
             render()
         }
         group.addView(resumeRow)
+
+        val cameraAlertRow = newRow(group)
+        cameraAlertRow.findViewById<TextView>(R.id.row_title).text =
+            "Auto-start CameraAlert Lite"
+        cameraAlertRow.findViewById<TextView>(R.id.row_sub).text =
+            "Start camera warnings in the background after reboot; does not open Google Maps"
+        cameraAlertRow.findViewById<TextView>(R.id.row_value).text =
+            if (preferences.getBoolean("qcar_cameraalert_autostart", false)) "On" else "Off"
+        cameraAlertRow.setOnClickListener {
+            val enabled = !preferences.getBoolean("qcar_cameraalert_autostart", false)
+            val bootCount = Settings.Global.getInt(
+                contentResolver, Settings.Global.BOOT_COUNT, -1)
+            preferences.edit()
+                .putBoolean("qcar_cameraalert_autostart", enabled)
+                .putInt("qcar_cameraalert_last_boot", bootCount)
+                .apply()
+            render()
+        }
+        group.addView(cameraAlertRow)
         content.addView(group)
         content.addView(spacer())
         val information = newGroup()
